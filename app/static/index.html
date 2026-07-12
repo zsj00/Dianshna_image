@@ -1,0 +1,754 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>电商智能生图平台</title>
+<style>
+/* ============================================================
+   Reset & Base
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --primary: #6C5CE7;
+  --primary-light: #A29BFE;
+  --accent: #FD79A8;
+  --success: #00B894;
+  --warning: #FDCB6E;
+  --danger: #E17055;
+  --bg: #0D0D1A;
+  --surface: #1A1A2E;
+  --surface-2: #25253D;
+  --text: #E8E8F0;
+  --text-muted: #8888A0;
+  --border: #2D2D4A;
+  --radius: 12px;
+  --radius-lg: 20px;
+  --shadow: 0 8px 32px rgba(0,0,0,0.3);
+  --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html { font-size: 16px; scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ============================================================
+   Background Decor
+   ============================================================ */
+.bg-grid {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(108,92,231,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(108,92,231,0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+.bg-glow {
+  position: fixed; z-index: 0; pointer-events: none;
+  width: 600px; height: 600px; border-radius: 50%;
+  filter: blur(180px); opacity: 0.08;
+}
+.bg-glow-1 { top: -200px; left: -100px; background: var(--primary); }
+.bg-glow-2 { bottom: -200px; right: -100px; background: var(--accent); }
+
+/* ============================================================
+   Layout
+   ============================================================ */
+.app { position: relative; z-index: 1; max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
+
+/* Header */
+.header { text-align: center; padding: 40px 0 32px; }
+.header .logo { font-size: 2.2rem; font-weight: 800; letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--primary-light), var(--accent));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.header .subtitle { color: var(--text-muted); font-size: 0.95rem; margin-top: 8px; }
+
+/* ============================================================
+   Cards
+   ============================================================ */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 28px; margin-bottom: 20px;
+  backdrop-filter: blur(10px);
+}
+.card-header { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+.card-header .icon { font-size: 1.4rem; }
+.card-header h2 { font-size: 1.1rem; font-weight: 700; }
+
+/* ============================================================
+   Step Indicator
+   ============================================================ */
+.steps { display: flex; justify-content: center; gap: 6px; margin-bottom: 32px; flex-wrap: wrap; }
+.step {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 14px; border-radius: 20px;
+  font-size: 0.8rem; color: var(--text-muted);
+  background: var(--surface); border: 1px solid var(--border);
+  transition: var(--transition);
+}
+.step.active { color: #fff; background: var(--primary); border-color: var(--primary); box-shadow: 0 0 16px rgba(108,92,231,0.3); }
+.step.done { color: var(--success); border-color: var(--success); }
+.step.fail { color: var(--danger); border-color: var(--danger); }
+.step-num { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 700; background: var(--surface-2); }
+.step.active .step-num { background: rgba(255,255,255,0.25); }
+.step.done .step-num { background: rgba(0,184,148,0.15); }
+
+/* ============================================================
+   Upload Zone
+   ============================================================ */
+.upload-zone {
+  border: 2px dashed var(--border); border-radius: var(--radius); padding: 40px 20px;
+  text-align: center; cursor: pointer; transition: var(--transition); position: relative;
+}
+.upload-zone:hover, .upload-zone.drag-over { border-color: var(--primary); background: rgba(108,92,231,0.05); }
+.upload-zone.has-image { border-style: solid; border-color: var(--primary-light); }
+.upload-zone .dz-icon { font-size: 3rem; margin-bottom: 12px; }
+.upload-zone .dz-text { color: var(--text-muted); font-size: 0.9rem; }
+.upload-zone .dz-hint { color: var(--text-muted); font-size: 0.75rem; margin-top: 6px; }
+.upload-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+.preview-img {
+  max-width: 100%; max-height: 280px; border-radius: var(--radius);
+  object-fit: contain; margin: 0 auto; display: block;
+}
+.preview-info {
+  display: flex; justify-content: center; gap: 20px; margin-top: 12px;
+  font-size: 0.8rem; color: var(--text-muted);
+}
+
+/* ============================================================
+   Forms
+   ============================================================ */
+.form-group { margin-bottom: 18px; }
+.form-group label {
+  display: block; font-size: 0.85rem; font-weight: 600; color: var(--text-muted); margin-bottom: 6px;
+}
+
+/* Platform Selector */
+.platform-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.platform-btn {
+  padding: 14px 10px; border-radius: var(--radius); border: 2px solid var(--border);
+  background: var(--surface-2); color: var(--text-muted); cursor: pointer;
+  text-align: center; font-size: 0.85rem; font-weight: 600;
+  transition: var(--transition);
+}
+.platform-btn:hover { border-color: var(--primary-light); color: var(--text); }
+.platform-btn.selected { border-color: var(--primary); background: rgba(108,92,231,0.15); color: var(--primary-light); box-shadow: 0 0 12px rgba(108,92,231,0.2); }
+.platform-btn .pf-icon { font-size: 1.5rem; display: block; margin-bottom: 4px; }
+
+/* Textarea & Input */
+textarea, input[type="text"], input[type="number"] {
+  width: 100%; padding: 12px 16px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-size: 0.9rem; font-family: inherit;
+  transition: var(--transition); resize: vertical;
+}
+textarea:focus, input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(108,92,231,0.15); }
+textarea { min-height: 80px; }
+.char-count { text-align: right; font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
+
+.range-row { display: flex; align-items: center; gap: 12px; }
+.range-row input[type="range"] { flex: 1; accent-color: var(--primary); }
+.range-val {
+  min-width: 32px; text-align: center; font-weight: 700; color: var(--primary-light);
+}
+
+/* Button */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 14px 32px; border-radius: 50px; border: none;
+  font-size: 1rem; font-weight: 700; cursor: pointer;
+  transition: var(--transition); position: relative; overflow: hidden;
+}
+.btn-primary {
+  width: 100%; background: linear-gradient(135deg, var(--primary), var(--accent));
+  color: #fff; box-shadow: 0 4px 20px rgba(108,92,231,0.35);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(108,92,231,0.45); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+.btn-xs {
+  padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 600;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border); cursor: pointer;
+}
+
+/* ============================================================
+   Progress
+   ============================================================ */
+.progress-section { display: none; }
+.progress-section.visible { display: block; }
+
+.progress-bar-wrap {
+  height: 6px; border-radius: 3px; background: var(--surface-2); margin: 16px 0; overflow: hidden;
+}
+.progress-bar {
+  height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent));
+  border-radius: 3px; transition: width 0.5s ease; width: 0%;
+}
+.progress-text { font-size: 0.85rem; color: var(--text-muted); }
+
+.log-list {
+  max-height: 200px; overflow-y: auto; margin-top: 12px;
+  font-size: 0.78rem; font-family: "SF Mono", "Consolas", monospace; color: var(--text-muted);
+  background: var(--bg); border-radius: var(--radius); padding: 12px;
+}
+.log-list .log-entry { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.03); }
+.log-list .log-entry.success { color: var(--success); }
+.log-list .log-entry.error { color: var(--danger); }
+.log-list .log-entry.warning { color: var(--warning); }
+
+/* ============================================================
+   Results
+   ============================================================ */
+.results-section { display: none; }
+.results-section.visible { display: block; }
+
+.status-badge {
+  display: inline-block; padding: 6px 16px; border-radius: 20px;
+  font-size: 0.8rem; font-weight: 700;
+}
+.status-badge.completed { background: rgba(0,184,148,0.15); color: var(--success); }
+.status-badge.failed { background: rgba(225,112,85,0.15); color: var(--danger); }
+
+.summary-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 16px 0; }
+.stat-card {
+  text-align: center; padding: 16px 10px; border-radius: var(--radius);
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.stat-card .stat-val { font-size: 1.5rem; font-weight: 800; color: var(--primary-light); }
+.stat-card .stat-label { font-size: 0.72rem; color: var(--text-muted); margin-top: 4px; }
+
+/* Image Gallery */
+.image-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 16px; }
+.image-card {
+  background: var(--surface-2); border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--border); transition: var(--transition);
+}
+.image-card:hover { border-color: var(--primary-light); }
+.image-card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.image-card .img-meta { padding: 12px; }
+.image-card .img-type {
+  font-size: 0.85rem; font-weight: 700; color: var(--text);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.image-card .img-type .compliant-tag {
+  padding: 2px 10px; border-radius: 12px; font-size: 0.7rem; font-weight: 700;
+}
+.compliant-tag.pass { background: rgba(0,184,148,0.15); color: var(--success); }
+.compliant-tag.fail { background: rgba(225,112,85,0.15); color: var(--danger); }
+.image-card .img-vio {
+  font-size: 0.72rem; color: var(--danger); margin-top: 4px; line-height: 1.4;
+}
+
+/* Report */
+.report-section { margin-top: 20px; }
+.report-section h3 { font-size: 1rem; font-weight: 700; margin-bottom: 12px; }
+.report-card {
+  background: var(--surface-2); border-radius: var(--radius); padding: 16px; font-size: 0.82rem;
+  border: 1px solid var(--border); max-height: 400px; overflow-y: auto; white-space: pre-wrap;
+  font-family: "SF Mono", "Consolas", monospace; color: var(--text-muted);
+}
+
+/* Toast */
+.toast {
+  position: fixed; top: 24px; right: 24px; z-index: 999;
+  padding: 14px 24px; border-radius: var(--radius); font-size: 0.85rem; font-weight: 600;
+  box-shadow: var(--shadow); animation: slideIn 0.3s ease;
+  max-width: 380px;
+}
+.toast.error { background: var(--danger); color: #fff; }
+.toast.success { background: var(--success); color: #fff; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Spinner */
+.spinner {
+  display: inline-block; width: 18px; height: 18px;
+  border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+  border-radius: 50%; animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Responsive */
+@media (max-width: 640px) {
+  .platform-grid { grid-template-columns: repeat(2, 1fr); }
+  .summary-stats { grid-template-columns: repeat(2, 1fr); }
+  .image-grid { grid-template-columns: 1fr; }
+  .header .logo { font-size: 1.6rem; }
+}
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow bg-glow-1"></div>
+<div class="bg-glow bg-glow-2"></div>
+
+<div class="app">
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">电商智能生图</div>
+    <p class="subtitle">上传商品原图 → 选择平台 → AI 自动生成合规商品图 + 审核报告</p>
+  </header>
+
+  <!-- Step Indicator -->
+  <div class="steps" id="stepIndicator">
+    <div class="step" data-step="upload"><span class="step-num">1<sup>step</sup></span> 上传图片</div>
+    <div class="step" data-step="parse"><span class="step-num">2</span> 规则解析</div>
+    <div class="step" data-step="generate"><span class="step-num">3</span> AI 生图</div>
+    <div class="step" data-step="audit"><span class="step-num">4</span> 合规审核</div>
+    <div class="step" data-step="done"><span class="step-num">5</span> 完成</div>
+  </div>
+
+  <!-- Upload & Config Card -->
+  <div class="card" id="configCard">
+    <div class="card-header">
+      <span class="icon">&#x1F4F7;</span>
+      <h2>上传商品原图 & 配置参数</h2>
+    </div>
+
+    <!-- Upload Zone -->
+    <div class="form-group">
+      <div class="upload-zone" id="uploadZone">
+        <div id="uploadPlaceholder">
+          <div class="dz-icon">&#x1F5BC;</div>
+          <div class="dz-text">点击或拖拽上传商品原图</div>
+          <div class="dz-hint">支持 JPG / PNG / WebP，建议 ≥ 800×800px</div>
+        </div>
+        <div id="uploadPreview" style="display:none">
+          <img class="preview-img" id="previewImage" alt="预览">
+          <div class="preview-info">
+            <span id="previewSize"></span>
+            <span id="previewDimensions"></span>
+          </div>
+          <button class="btn-xs" style="margin-top:10px" onclick="resetUpload()">重新选择</button>
+        </div>
+        <input type="file" id="fileInput" accept="image/*">
+      </div>
+    </div>
+
+    <!-- Platform -->
+    <div class="form-group">
+      <label>&#x1F310; 目标电商平台</label>
+      <div class="platform-grid" id="platformGrid">
+        <button class="platform-btn" data-platform="amazon">
+          <span class="pf-icon">&#x1F1FA;&#x1F1F8;</span> Amazon
+        </button>
+        <button class="platform-btn" data-platform="taobao">
+          <span class="pf-icon">&#x1F1E8;&#x1F1F3;</span> 淘宝/天猫
+        </button>
+        <button class="platform-btn" data-platform="aliexpress">
+          <span class="pf-icon">&#x1F310;</span> 速卖通
+        </button>
+        <button class="platform-btn" data-platform="shopee">
+          <span class="pf-icon">&#x1F1F8;&#x1F1EC;</span> Shopee
+        </button>
+      </div>
+    </div>
+
+    <!-- Selling Points -->
+    <div class="form-group">
+      <label>&#x2728; 商品卖点文案</label>
+      <textarea id="sellingPoints" placeholder="例：350ml大容量 | 食品级陶瓷 | 哑光釉面 | 北欧简约设计 | 送礼佳品"
+        maxlength="5000"></textarea>
+      <div class="char-count"><span id="charCount">0</span>/5000</div>
+    </div>
+
+    <!-- Max Retries -->
+    <div class="form-group">
+      <label>&#x1F504; 不合规重试次数</label>
+      <div class="range-row">
+        <input type="range" id="maxRetries" min="0" max="10" value="3">
+        <span class="range-val" id="retriesVal">3</span>
+      </div>
+    </div>
+
+    <!-- Submit Button -->
+    <button class="btn btn-primary" id="submitBtn" onclick="submitPipeline()">
+      &#x1F680; 开始生成
+    </button>
+  </div>
+
+  <!-- Progress Section -->
+  <div class="card progress-section" id="progressSection">
+    <div class="card-header">
+      <span class="icon">&#x2699;</span>
+      <h2>任务进度&nbsp;<span id="progressStatus" style="font-size:0.8rem;color:var(--text-muted)">pending</span></h2>
+    </div>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+    <div class="progress-text" id="progressText">等待任务提交...</div>
+    <div class="log-list" id="logList"></div>
+  </div>
+
+  <!-- Results Section -->
+  <div class="card results-section" id="resultsSection">
+    <div class="card-header">
+      <span class="icon">&#x1F4CA;</span>
+      <h2>生成结果&nbsp;<span class="status-badge" id="resultStatus"></span></h2>
+    </div>
+
+    <div class="summary-stats" id="summaryStats"></div>
+
+    <h3 style="font-size:1rem;font-weight:700;margin:16px 0 8px">&#x1F5BC; 生成图片</h3>
+    <div class="image-grid" id="imageGrid"></div>
+
+    <div class="report-section">
+      <h3>&#x1F4CB; 审核报告</h3>
+      <div class="report-card" id="reportCard"></div>
+    </div>
+
+    <button class="btn-xs" style="margin-top:16px" onclick="resetPipeline()">&#x21A9; 启动新任务</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   State
+   ============================================================ */
+const API_BASE = '';
+let selectedPlatform = null;
+let selectedFile = null;
+let pollTimer = null;
+let currentTaskId = null;
+let pollFailCount = 0;
+let lastErrorMsg = '';
+let pollInterval = 3000;
+const MAX_POLL_INTERVAL = 15000;
+
+/* ============================================================
+   Upload
+   ============================================================ */
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+const uploadPlaceholder = document.getElementById('uploadPlaceholder');
+const uploadPreview = document.getElementById('uploadPreview');
+const previewImage = document.getElementById('previewImage');
+const previewSize = document.getElementById('previewSize');
+const previewDimensions = document.getElementById('previewDimensions');
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files.length) handleFile(fileInput.files[0]);
+});
+
+function handleFile(file) {
+  if (!file.type.startsWith('image/')) { showToast('请选择图片文件', 'error'); return; }
+  selectedFile = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    previewImage.src = ev.target.result;
+    previewSize.textContent = formatBytes(file.size);
+    previewDimensions.textContent = '加载中...';
+    const img = new Image();
+    img.onload = () => { previewDimensions.textContent = `${img.width} x ${img.height}px`; };
+    img.src = ev.target.result;
+    uploadPlaceholder.style.display = 'none';
+    uploadPreview.style.display = 'block';
+    uploadZone.classList.add('has-image');
+  };
+  reader.readAsDataURL(file);
+}
+
+function resetUpload() {
+  selectedFile = null;
+  fileInput.value = '';
+  uploadPlaceholder.style.display = 'block';
+  uploadPreview.style.display = 'none';
+  uploadZone.classList.remove('has-image');
+}
+
+function formatBytes(b) { return b < 1024 ? b + ' B' : b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB'; }
+
+/* ============================================================
+   Platform
+   ============================================================ */
+document.querySelectorAll('.platform-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.platform-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    selectedPlatform = btn.dataset.platform;
+  });
+});
+
+/* ============================================================
+   Selling points char count
+   ============================================================ */
+const sellingInput = document.getElementById('sellingPoints');
+const charCount = document.getElementById('charCount');
+sellingInput.addEventListener('input', () => charCount.textContent = sellingInput.value.length);
+
+/* ============================================================
+   Max Retries Slider
+   ============================================================ */
+document.getElementById('maxRetries').addEventListener('input', function() {
+  document.getElementById('retriesVal').textContent = this.value;
+});
+
+/* ============================================================
+   Pipeline Submission
+   ============================================================ */
+async function submitPipeline() {
+  if (!selectedFile) { showToast('请先上传商品原图', 'error'); return; }
+  if (!selectedPlatform) { showToast('请选择目标平台', 'error'); return; }
+  const sellingPoints = sellingInput.value.trim();
+  if (!sellingPoints) { showToast('请填写商品卖点文案', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('product_image', selectedFile);
+  formData.append('platform', selectedPlatform);
+  formData.append('selling_points', sellingPoints);
+  formData.append('max_retries', document.getElementById('maxRetries').value);
+
+  document.getElementById('submitBtn').disabled = true;
+  document.getElementById('submitBtn').innerHTML = '<span class="spinner"></span> 提交中...';
+
+  // 前端超时控制：60秒无响应则中止
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/pipeline/ecommerce-assets`, {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    currentTaskId = data.task_id;
+    document.getElementById('progressSection').classList.add('visible');
+    document.getElementById('logList').innerHTML = '';
+    addLog('任务已提交，开始执行管道...', 'info');
+    document.getElementById('progressBar').style.width = '5%';
+    document.getElementById('progressText').textContent = '初始化...';
+    document.getElementById('progressStatus').textContent = 'parsing';
+
+    startPolling();
+  } catch (e) {
+    showToast('提交失败: ' + e.message, 'error');
+    document.getElementById('submitBtn').disabled = false;
+    document.getElementById('submitBtn').innerHTML = '&#x1F680; 开始生成';
+  }
+}
+
+/* ============================================================
+   Polling
+   ============================================================ */
+function startPolling() {
+  pollFailCount = 0;
+  lastErrorMsg = '';
+  pollInterval = 3000;
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll() {
+  pollTimer = setTimeout(async () => {
+    await pollTask();
+    if (pollTimer) scheduleNextPoll();
+  }, pollInterval);
+}
+
+async function pollTask() {
+  if (!currentTaskId) return;
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/task/${currentTaskId}`);
+
+    // 成功 → 重置失败计数和间隔
+    pollFailCount = 0;
+    pollInterval = 3000;
+
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        // 任务可能刚创建，后台还没就绪→静默重试
+        document.getElementById('progressText').textContent = '任务初始化中，请稍候...';
+        return;
+      }
+      throw new Error(`HTTP ${resp.status}`);
+    }
+
+    const data = await resp.json();
+    updateProgress(data);
+    if (data.status === 'completed' || data.status === 'failed') {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+      showResults(data);
+    }
+  } catch (e) {
+    pollFailCount++;
+    // 退避策略：每次失败间隔翻倍（3s→6s→12s→封顶15s）
+    pollInterval = Math.min(pollInterval * 2, MAX_POLL_INTERVAL);
+
+    const errMsg = e.message || '网络异常';
+    // 去重：同错误不重复记录
+    if (errMsg !== lastErrorMsg) {
+      lastErrorMsg = errMsg;
+      addLog(`请求失败: ${errMsg}`, 'warning');
+    }
+
+    // 友好提示（仅前3次）
+    if (pollFailCount <= 3) {
+      document.getElementById('progressText').textContent =
+        `服务暂时响应慢，正在自动重试（第 ${pollFailCount} 次）...`;
+    } else {
+      document.getElementById('progressText').textContent =
+        `持续等待中（已重试 ${pollFailCount} 次）——请确保 ComfyUI 等服务已启动`;
+    }
+  }
+}
+
+function updateProgress(data) {
+  const statusMap = { pending:5, parsing:15, generating:40, auditing:65, retrying:80, archiving:92, completed:100, failed:100 };
+  const pct = statusMap[data.status] || 0;
+  document.getElementById('progressBar').style.width = pct + '%';
+  document.getElementById('progressText').textContent = `当前步骤: ${data.status} (${pct}%)`;
+  document.getElementById('progressStatus').textContent = data.status;
+
+  // Update step indicator
+  const stepOrder = ['upload','parse','generate','audit','done'];
+  const currentIdx = stepOrder.indexOf(data.status === 'completed' ? 'done' : data.status === 'retrying' ? 'generate' : data.status === 'archiving' ? 'audit' : data.status);
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active','done','fail'));
+  stepOrder.forEach((step, i) => {
+    const el = document.querySelector(`.step[data-step="${step}"]`);
+    if (i < currentIdx) el.classList.add('done');
+    else if (i === currentIdx || (data.status === 'completed' && step === 'done')) el.classList.add('active');
+  });
+  if (data.status === 'failed') document.querySelector('.step[data-step="done"]').classList.add('fail');
+
+  // Add log entries from pipeline
+  if (data.report && data.report.pipeline_log) {
+    const existingLogs = document.getElementById('logList').children.length;
+    data.report.pipeline_log.slice(existingLogs).forEach(entry => {
+      addLog(`${entry.step || ''} ${entry.message || ''}`, entry.status === 'failed' ? 'error' : 'success');
+    });
+  }
+}
+
+/* ============================================================
+   Results
+   ============================================================ */
+function showResults(data) {
+  document.getElementById('configCard').style.display = 'none';
+  document.getElementById('resultsSection').classList.add('visible');
+
+  const statusBadge = document.getElementById('resultStatus');
+  if (data.status === 'completed') {
+    statusBadge.textContent = '完成';
+    statusBadge.className = 'status-badge completed';
+  } else {
+    statusBadge.textContent = '失败';
+    statusBadge.className = 'status-badge failed';
+  }
+
+  // Stats
+  const stats = data.report?.compliance_stats || {};
+  document.getElementById('summaryStats').innerHTML = `
+    <div class="stat-card"><div class="stat-val">${stats.total || data.images?.length || 0}</div><div class="stat-label">生成图片</div></div>
+    <div class="stat-card"><div class="stat-val" style="color:var(--success)">${stats.compliant ?? '-'}</div><div class="stat-label">合规通过</div></div>
+    <div class="stat-card"><div class="stat-val">${stats.average_score ?? '-'}</div><div class="stat-label">综合评分</div></div>
+    <div class="stat-card"><div class="stat-val">${data.total_retries ?? 0}</div><div class="stat-label">重试次数</div></div>
+  `;
+
+  // Images
+  const images = data.images || [];
+  const grid = document.getElementById('imageGrid');
+  grid.innerHTML = images.map(img => {
+    const pass = img.compliant !== false;
+    const vioText = img.audit_result?.violations?.map(v => v.rule).join('；') || '';
+    return `
+      <div class="image-card">
+        <img src="${img.path ? '/output/' + img.path.replace(/\\/g, '/').split('output/').pop() : ''}" alt="${img.type}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231a1a2e%22 width=%22200%22 height=%22200%22/><text fill=%22%23888%22 x=%22100%22 y=%22100%22 text-anchor=%22middle%22 dy=%22.3em%22 font=%2214px sans-serif%22>image not found</text></svg>'">
+        <div class="img-meta">
+          <div class="img-type">
+            ${getTypeLabel(img.type)}
+            <span class="compliant-tag ${pass ? 'pass' : 'fail'}">${pass ? '合规' : '不合规'}</span>
+          </div>
+          ${vioText ? `<div class="img-vio">违规: ${vioText}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Report
+  const reportCard = document.getElementById('reportCard');
+  if (data.report) {
+    reportCard.textContent = JSON.stringify(data.report, null, 2);
+  } else if (data.error) {
+    reportCard.textContent = '错误: ' + data.error;
+  }
+}
+
+function getTypeLabel(type) {
+  const labels = {
+    white_bg_main: '白底主图', scene_lifestyle: '场景营销图',
+    detail_closeup: '细节特写图', scale_comparison: '尺寸对比图'
+  };
+  return labels[type] || type;
+}
+
+/* ============================================================
+   Reset
+   ============================================================ */
+function resetPipeline() {
+  clearTimeout(pollTimer);
+  currentTaskId = null;
+  document.getElementById('configCard').style.display = 'block';
+  document.getElementById('progressSection').classList.remove('visible');
+  document.getElementById('resultsSection').classList.remove('visible');
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('submitBtn').disabled = false;
+  document.getElementById('submitBtn').innerHTML = '&#x1F680; 开始生成';
+  resetUpload();
+  document.getElementById('sellingPoints').value = '';
+  charCount.textContent = '0';
+  document.querySelectorAll('.platform-btn').forEach(b => b.classList.remove('selected'));
+  selectedPlatform = null;
+  document.getElementById('maxRetries').value = 3;
+  document.getElementById('retriesVal').textContent = '3';
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active','done','fail'));
+  document.querySelector('.step[data-step="upload"]').classList.add('active');
+}
+
+/* ============================================================
+   Helpers
+   ============================================================ */
+function addLog(msg, level) {
+  const el = document.createElement('div');
+  el.className = `log-entry ${level}`;
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  document.getElementById('logList').appendChild(el);
+  el.scrollIntoView({ behavior: 'smooth' });
+}
+
+function showToast(msg, level) {
+  const toast = document.createElement('div');
+  toast.className = `toast ${level}`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s'; setTimeout(() => toast.remove(), 300); }, 3500);
+}
+
+// Init: highlight upload step
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelector('.step[data-step="upload"]').classList.add('active');
+});
+</script>
+</body>
+</html>
