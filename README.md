@@ -72,15 +72,13 @@ cd MeituEcomAgent
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-- Web UI: http://localhost:8000/ui
-- API Docs: http://localhost:8000/docs
-- Health: http://localhost:8000/api/v1/health
+
 
 ### Docker
 
 ```bash
 docker compose up -d
-# Web UI: http://localhost:8002
+
 ```
 
 ## Pipeline / 核心管线
@@ -177,4 +175,3 @@ MeituEcomAgent/
 
 ## License / 许可
 
-MIT License
