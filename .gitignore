@@ -1,0 +1,41 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+
+# Environment
+.env
+*.env.local
+*.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Output
+output/
+
+# Knowledge base index
+knowledge_base_index/
+
+# Logs
+*.log
+logs/
+
+# Virtual environment
+venv/
+.venv/
+env/
