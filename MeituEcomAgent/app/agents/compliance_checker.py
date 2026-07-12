@@ -292,9 +292,37 @@ class ComplianceCheckerAgent:
 
         # 3. 获取平台规则（仅获取与当前图片类型相关的规则）
         try:
+            # 按图片类型精准检索对应规则段
+            # 直接从规则文件中提取当前图片类型的规则段
             rules_text = await asyncio.to_thread(
                 self.rag_service.get_all_rules_for_platform, platform_lower
             )
+            
+            # 按图片类型过滤规则段（匹配 "## 一、白底主图规则（white_bg_main）" 格式）
+            section_map = {
+                "white_bg_main": "白底主图规则",
+                "scene_lifestyle": "场景生活图规则",
+                "detail_closeup": "细节特写图规则",
+                "scale_comparison": "尺寸对比图规则",
+            }
+            target = section_map.get(image_type, "")
+            alt_target = {"white_bg_main":"white_bg_main","scene_lifestyle":"scene_lifestyle","detail_closeup":"detail_closeup","scale_comparison":"scale_comparison"}.get(image_type, "")
+            
+            # 提取目标章节内容
+            filtered = []
+            in_target = False
+            for line in rules_text.split("\n"):
+                if line.startswith("## ") and "规则" in line:
+                    in_target = (target in line) or (alt_target in line)
+                elif line.startswith("## ") or line.startswith("# "):
+                    if "规则" not in line:
+                        in_target = False
+                if in_target:
+                    filtered.append(line)
+            
+            if filtered:
+                rules_text = "\n".join(filtered)
+                logger.info("图片类型规则提取成功 | type=%s | 长度=%d 字符", image_type, len(rules_text))
         except Exception as e:
             raise RuleFetchError(f"获取平台规则失败: {str(e)}") from e
 

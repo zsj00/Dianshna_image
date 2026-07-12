@@ -1,4 +1,4 @@
-"""
+﻿"""
 规则解析Agent - 负责解析输入的规则文本，提取结构化信息
 
 核心功能:
@@ -170,7 +170,7 @@ class RuleParserAgent:
                         "prompt_en": "...",
                         "negative_prompt": "...",
                         "aspect_ratio": "1:1",
-                        "resolution": "1600x1600",
+                        "resolution": "800x800",
                         "style_notes": "..."
                     },
                     "scene_lifestyle": { ... },
@@ -217,16 +217,24 @@ class RuleParserAgent:
         # 3. 构造 system prompt
         system_prompt = self._build_system_prompt()
 
-        # 4. 构造 user prompt
+        # 4. 视觉分析参考图（如有）
+        visual_analysis = ""
+        if reference_image_url:
+            visual_analysis = await self._analyze_reference_image(
+                reference_image_url, product_desc
+            )
+
+        # 5. 构造 user prompt
         user_prompt = self._build_user_prompt(
             platform_display=platform_display,
             product_desc=product_desc,
             rules_text=rules_text,
             reference_image_url=reference_image_url,
+            visual_analysis=visual_analysis,
             selling_points=selling_points,
         )
 
-        # 5. 调用 LLM
+        # 6. 调用 LLM
         try:
             raw_response = await self._call_llm(system_prompt, user_prompt)
         except LLMCallError:
@@ -246,7 +254,7 @@ class RuleParserAgent:
                     f"无法将 LLM 响应解析为 JSON: {str(e)}"
                 ) from e
 
-        # 7. 后处理：补充平台名称
+        # 8. 后处理：补充平台名称
         if "platform" not in result:
             result["platform"] = platform_display
 
@@ -298,7 +306,7 @@ class RuleParserAgent:
                 "prompt_en": "...",
                 "negative_prompt": "...",
                 "aspect_ratio": "1:1",
-                "resolution": "1600x1600",
+                "resolution": "800x800",
                 "style_notes": "..."
             }
         """
@@ -374,6 +382,91 @@ class RuleParserAgent:
         logger.info("单图 prompt 生成完成 | type=%s", type_label)
         return result
 
+    # ==================== 视觉分析 ====================
+
+    async def _analyze_reference_image(self, image_path: str, product_desc: str) -> str:
+        """
+        使用视觉模型分析商品参考图，提取外观特征描述
+
+        Args:
+            image_path: 本地图片路径
+            product_desc: 商品文字描述
+
+        Returns:
+            str: 基于视觉分析的商品外观描述（中文）
+        """
+        import base64
+        from pathlib import Path
+
+        img_path = Path(image_path)
+        if not img_path.exists():
+            logger.warning("参考图不存在，跳过视觉分析: %s", image_path)
+            return ""
+
+        ext = img_path.suffix.lower()
+        mime_map = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+        mime_type = mime_map.get(ext, "image/png")
+
+        try:
+            image_bytes = img_path.read_bytes()
+            if len(image_bytes) > 5 * 1024 * 1024:
+                logger.warning("参考图过大（%.1fMB），跳过视觉分析", len(image_bytes) / 1024 / 1024)
+                return ""
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        except Exception as e:
+            logger.warning("读取参考图失败: %s", str(e))
+            return ""
+
+        vision_model = settings.VISION_MODEL
+        logger.info("调用视觉模型分析商品图 | model=%s | path=%s", vision_model, str(img_path)[:80])
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=vision_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是一个专业的电商商品视觉分析专家。请仔细观察商品图片，"
+                            "提取商品的外观特征，用于后续AI图像生成。"
+                            "描述需包含：商品类型、形状、颜色、材质、关键设计元素、"
+                            "品牌标识位置（如有）、包装特征等。"
+                            "输出简洁但信息密度高的中文描述，不超过300字。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"请分析这张商品图片的外观特征。商品文字描述供参考：{product_desc}",
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{image_b64}",
+                                    "detail": "high",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                temperature=0.3,
+                max_tokens=1000,
+            )
+
+            analysis = response.choices[0].message.content or ""
+            logger.info(
+                "视觉分析完成 | tokens=%s | analysis_len=%d",
+                response.usage.total_tokens if response.usage else "unknown",
+                len(analysis),
+            )
+            return analysis
+
+        except Exception as e:
+            logger.warning("视觉模型调用失败（将仅用文字描述生成prompt）: %s", str(e))
+            return ""
+
     # ==================== Prompt 构造方法 ====================
 
     def _build_system_prompt(self) -> str:
@@ -392,10 +485,10 @@ class RuleParserAgent:
    - 严格遵循平台的"无牛皮癣"规则
    
 2. **scene_lifestyle（场景生活图）**：
-   - 商品在真实使用场景中的展示
-   - 体现商品的使用价值和生活方式
-   - 背景风格自然、高级感
-   
+   - 商品本身与白底主图完全一致（形态、颜色、细节均不变）
+   - 仅背景替换为真实使用场景（家居、桌面、厨房、客厅等）
+   - prompt 中必须强调 "same product, identical object, only background changed"
+   - negative_prompt 必须包含 "white background, plain background, studio, isolated"
 3. **detail_closeup（细节特写图）**：
    - 商品的关键细节大特写
    - 展示材质纹理、做工工艺
@@ -466,6 +559,7 @@ class RuleParserAgent:
         product_desc: str,
         rules_text: str,
         reference_image_url: Optional[str] = None,
+        visual_analysis: str = "",
         selling_points: Optional[str] = None,
     ) -> str:
         """构造用户提示词 - 全量生图场景"""
@@ -489,7 +583,14 @@ class RuleParserAgent:
             f"## 平台图片规则（必须严格遵守）\n{rules_text}",
         ])
 
-        if reference_image_url:
+        if visual_analysis:
+            prompt_parts.extend([
+                "",
+                "## 商品外观视觉分析（基于用户上传的商品原图）",
+                visual_analysis,
+                "请严格基于以上视觉分析的商品外观特征，生成各类型图片的 prompt。",
+            ])
+        elif reference_image_url:
             prompt_parts.extend([
                 "",
                 "## 参考图片",
@@ -513,7 +614,7 @@ class RuleParserAgent:
         """构造单图模式系统提示词"""
         type_descriptions = {
             "white_bg_main": "纯白/浅色背景上的商品正面展示，商品居中、清晰，严格遵循'无牛皮癣'规则",
-            "scene_lifestyle": "商品在真实高端使用场景中的展示，背景自然、有生活感，体现使用价值",
+            "scene_lifestyle": "商品与白底主图完全一致，仅背景替换为真实生活场景（家居/桌面/厨房等），自然光影，温馨氛围",
             "detail_closeup": "商品关键细节的超大特写，展示材质纹理、做工工艺，高清晰度微距效果",
             "scale_comparison": "通过参照物（如硬币、手掌）展示商品实际大小，清晰直观的尺寸对比",
         }

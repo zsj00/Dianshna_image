@@ -1,33 +1,15 @@
-# ============================================================
+﻿# ============================================================
 # MeituEcomAgent - Docker Compose 编排配置
 # ============================================================
-# 启动: docker-compose up -d
-# 停止: docker-compose down
-# 查看日志: docker-compose logs -f api
+# 启动: docker compose up -d
+# 停止: docker compose down
+# 查看日志: docker compose logs -f api
+# ============================================================
+# 注意: ChromaDB 使用嵌入式模式 (chromadb Python 包内置 PersistentClient)，
+# 无需独立的 chromadb/chroma 容器。
 # ============================================================
 
 services:
-  # ========== ChromaDB 向量数据库 ==========
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: meitu-chromadb
-    restart: unless-stopped
-    ports:
-      - "8001:8000"
-    environment:
-      - IS_PERSISTENT=TRUE
-    volumes:
-      # 持久化向量数据
-      - chromadb_data:/chroma/chroma
-    # healthcheck:
-    #   test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat" ]
-    #   interval: 15s
-    #   timeout: 5s
-    #   start_period: 20s
-    #   retries: 3
-    networks:
-      - meitu-network
-
   # ========== FastAPI 应用 ==========
   api:
     build:
@@ -47,12 +29,12 @@ services:
       - ./knowledge_base:/app/knowledge_base:ro
       # 持久化 RAG 向量索引
       - rag_index_data:/app/knowledge_base_index
+      # 挂载应用代码（开发模式：改代码即时生效，无需重建）
+      - ./app:/app/app
       # 挂载 ComfyUI 工作流文件
       - ./workflows:/app/workflows:ro
       # 持久化生成的图片和报告
       - output_data:/app/output
-    depends_on:
-      - chromadb
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/health" ]
       interval: 30s
@@ -66,9 +48,6 @@ services:
 # 数据卷
 # ============================================================
 volumes:
-  # ChromaDB 向量数据持久化
-  chromadb_data:
-    driver: local
   # RAG 向量索引持久化
   rag_index_data:
     driver: local

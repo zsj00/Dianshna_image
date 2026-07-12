@@ -1,4 +1,4 @@
-"""
+﻿"""
 生图调度Agent - 负责根据解析后的规则调度图片生成流程
 
 核心功能:
@@ -62,9 +62,9 @@ class GenerationError(ImageGeneratorError):
 # 图片类型到工作流文件的映射
 IMAGE_TYPE_WORKFLOW_MAP = {
     "white_bg_main": "workflow_white_bg.json",
-    "scene_lifestyle": "workflow_scene.json",
+    "scene_lifestyle": "workflow_scene_txt2img.json",  # txt2img 生成场景背景，后处理时合成产品
     "detail_closeup": "workflow_detail.json",
-    "scale_comparison": "workflow_comparison.json",
+    "scale_comparison": "workflow_white_bg.json",
     # 默认工作流（回退到白底主图工作流）
     "_default": "workflow_white_bg.json",
 }
@@ -200,7 +200,29 @@ class ImageGeneratorAgent:
             widgets_values = node.get("widgets_values", [])
             control_after_generate_opts = {"randomize", "fixed", "increment", "decrement"}
 
-            for inp in node.get("inputs", []):
+            # 节点没有 inputs 数组时的回退处理
+            # 某些 ComfyUI 内置节点（如 CheckpointLoaderSimple）的 GUI JSON 不包含 inputs
+            inputs = node.get("inputs", [])
+            if not inputs and widgets_values:
+                node_type = node["type"]
+                if node_type == "CheckpointLoaderSimple":
+                    inputs = [{"name": "ckpt_name", "widget": {"name": "ckpt_name"}}]
+                elif node_type == "LoadImage":
+                    inputs = [{"name": "image", "widget": {"name": "image"}}]
+                elif node_type == "EmptyLatentImage":
+                    inputs = [
+                        {"name": "width", "widget": {"name": "width"}},
+                        {"name": "height", "widget": {"name": "height"}},
+                        {"name": "batch_size", "widget": {"name": "batch_size"}},
+                    ]
+                elif node_type == "LoraLoader":
+                    inputs = [
+                        {"name": "lora_name", "widget": {"name": "lora_name"}},
+                        {"name": "strength_model", "widget": {"name": "strength_model"}},
+                        {"name": "strength_clip", "widget": {"name": "strength_clip"}},
+                    ]
+
+            for inp in inputs:
                 input_name = inp["name"]
 
                 if inp.get("link") is not None:
@@ -256,7 +278,7 @@ class ImageGeneratorAgent:
             )
 
         try:
-            with open(workflow_path, "r", encoding="utf-8") as f:
+            with open(workflow_path, "r", encoding="utf-8-sig") as f:
                 workflow = json.load(f)
 
             # 转换 GUI 格式 → API 格式
@@ -436,6 +458,8 @@ class ImageGeneratorAgent:
         negative_prompt: str,
         resolution: Tuple[int, int],
         timeout: int = 300,
+        reference_image_name: str = "",
+        selling_points: str = "",
     ) -> str:
         """
         提交单个生图任务，等待完成并下载图片
@@ -464,13 +488,17 @@ class ImageGeneratorAgent:
         # 3. 随机化 seed
         workflow = self.randomize_seed(workflow)
 
-        # 4. 提交任务
+        # 4. 注入参考图（img2img）
+        if reference_image_name:
+            workflow = self.inject_loadimage(workflow, reference_image_name)
+
+        # 5. 提交任务
         try:
             prompt_id = await self.comfyui.queue_prompt(workflow)
         except ComfyUIError as e:
             raise GenerationError(f"提交生图任务失败: {str(e)}") from e
 
-        # 5. 等待完成
+        # 6. 等待完成
         try:
             history = await self.comfyui.wait_for_completion(
                 prompt_id=prompt_id,
@@ -479,7 +507,7 @@ class ImageGeneratorAgent:
         except ComfyUIError as e:
             raise GenerationError(f"等待生图完成失败: {str(e)}") from e
 
-        # 6. 提取输出图片信息
+        # 7. 提取输出图片信息
         outputs = history.get("outputs", {})
         if not outputs:
             raise GenerationError(f"任务完成但无输出: prompt_id={prompt_id}")
@@ -494,7 +522,7 @@ class ImageGeneratorAgent:
         if not images:
             raise GenerationError(f"未找到生成的图片: prompt_id={prompt_id}")
 
-        # 7. 下载第一张图片
+        # 8. 下载第一张图片
         img_info = images[0]
         filename = img_info["filename"]
         subfolder = img_info.get("subfolder", "")
@@ -521,9 +549,12 @@ class ImageGeneratorAgent:
         self,
         prompts: dict,
         workflow_dir: Optional[str] = None,
-        concurrent: bool = True,
-        timeout_per_image: int = 600,
+        concurrent: bool = False,  # MX450 2GB显存下串行避免OOM
+        timeout_per_image: int = 300,  # MX450 2GB 实测~2分钟/张，需宽松超时
+        reference_image_name: str = "",
+        selling_points: str = "",
     ) -> List[str]:
+        white_bg_path = ""  # 用于场景合成
         """
         根据 rule_parser 生成的 prompts 批量生成图片套装
 
@@ -533,7 +564,7 @@ class ImageGeneratorAgent:
                 "prompt_en": "...",
                 "negative_prompt": "...",
                 "aspect_ratio": "1:1",
-                "resolution": "1600x1600",
+                "resolution": "800x800",
                 "style_notes": "..."
             },
             "scene_lifestyle": { ... },
@@ -570,7 +601,7 @@ class ImageGeneratorAgent:
         if concurrent:
             # 并发生成：ComfyUI 串行处理 GPU 任务，
             # 每张图都必须等前面所有图完成才开始，因此总超时 = 单图超时 × 图片数量
-            effective_timeout = timeout_per_image * len(image_types)
+            effective_timeout = timeout_per_image * len(image_types) * 2  # 最多2个并发
             logger.info(
                 "并发模式 | 图片数=%d | 单图超时=%ds | 有效超时=%ds",
                 len(image_types),
@@ -580,12 +611,17 @@ class ImageGeneratorAgent:
             tasks = []
             for image_type in image_types:
                 prompt_data = prompts[image_type]
+                workflow_name = IMAGE_TYPE_WORKFLOW_MAP.get(image_type, IMAGE_TYPE_WORKFLOW_MAP["_default"])
+                ref_img = "" if "txt2img" in workflow_name else reference_image_name
                 task_id = self._create_task(image_type)
                 coro = self._generate_one_with_tracking(
                     task_id=task_id,
                     image_type=image_type,
                     prompt_data=prompt_data,
                     timeout=effective_timeout,
+                    reference_image_name=ref_img,
+                    selling_points=selling_points,
+                    white_bg_path=white_bg_path,
                 )
                 tasks.append(coro)
 
@@ -606,8 +642,11 @@ class ImageGeneratorAgent:
         else:
             # 顺序生成
             output_paths = []
+            white_bg_path = ""  # 用于场景合成
             for image_type in image_types:
                 prompt_data = prompts[image_type]
+                workflow_name = IMAGE_TYPE_WORKFLOW_MAP.get(image_type, IMAGE_TYPE_WORKFLOW_MAP["_default"])
+                ref_img = "" if "txt2img" in workflow_name else reference_image_name
                 task_id = self._create_task(image_type)
                 try:
                     path = await self._generate_one_with_tracking(
@@ -615,7 +654,12 @@ class ImageGeneratorAgent:
                         image_type=image_type,
                         prompt_data=prompt_data,
                         timeout=timeout_per_image,
+                        reference_image_name=ref_img,
+                        selling_points=selling_points,
+                        white_bg_path=white_bg_path,
                     )
+                    if image_type == "white_bg_main":
+                        white_bg_path = path
                     output_paths.append(path)
                 except Exception as e:
                     logger.error(
@@ -637,6 +681,9 @@ class ImageGeneratorAgent:
         image_type: str,
         prompt_data: dict,
         timeout: int = 300,
+        reference_image_name: str = "",
+        selling_points: str = "",
+        white_bg_path: str = "",
     ) -> str:
         """
         带状态跟踪的单图生成
@@ -689,7 +736,11 @@ class ImageGeneratorAgent:
                 negative_prompt=negative,
                 resolution=resolution,
                 timeout=timeout,
+                reference_image_name=reference_image_name,
             )
+
+            # 后处理：根据图片类型优化输出
+            output_path = self._post_process(output_path, image_type, selling_points, white_bg_path)
 
             self._update_task(
                 task_id,
@@ -706,8 +757,51 @@ class ImageGeneratorAgent:
             )
             raise
 
-    # ==================== 图片保存 ====================
+    # ==================== 后处理 ====================
 
+    @staticmethod
+    def _post_process(image_path: str, image_type: str, selling_points: str = "", white_bg_path: str = "") -> str:
+        """
+        对生成图片进行后处理
+        
+        - white_bg_main: 确保纯白背景（消除PNG透明度）
+        - detail_closeup: 中心裁剪（突出细节），保留原始背景
+        - scale_comparison: 添加专业尺寸标注线（长宽高cm）
+        - scene_lifestyle: 保留原始场景背景，不做白底处理
+        """
+        from app.utils.image_utils import (
+            ensure_white_background,
+            crop_center,
+            add_size_label,
+        )
+        
+        try:
+            if image_type == "white_bg_main":
+                image_path = ensure_white_background(image_path)
+                logger.info("后处理[white_bg]: 白底填充完成")
+                # 叠加商品卖点文案
+                if selling_points:
+                    from app.utils.image_utils import overlay_selling_points
+                    image_path = overlay_selling_points(image_path, selling_points)
+                    logger.info("后处理[white_bg]: 商品文案叠加完成")
+            elif image_type == "detail_closeup":
+                image_path = crop_center(image_path, crop_ratio=0.4)
+                logger.info("后处理[detail]: 中心裁剪完成（40%区域）")
+            elif image_type == "scale_comparison":
+                image_path = add_size_label(image_path)
+                logger.info("后处理[comparison]: 专业尺寸标注完成")
+            elif image_type == "scene_lifestyle":
+                logger.info("后处理[scene]: 执行产品+场景合成")
+                if white_bg_path:
+                    from app.utils.image_utils import composite_product_to_scene
+                    image_path = composite_product_to_scene(white_bg_path, image_path)
+                else:
+                    logger.warning("后处理[scene]: 无白底图路径，跳过合成")
+            else:
+                logger.info("后处理[%s]: 无特殊处理", image_type)
+        except Exception as e:
+            logger.warning("后处理失败（使用原图）: %s", str(e))
+        return image_path
     def _save_image(self, image_bytes: bytes, original_filename: str = "") -> str:
         """
         保存图片到 output/ 目录

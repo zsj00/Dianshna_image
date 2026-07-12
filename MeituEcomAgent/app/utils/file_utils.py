@@ -56,7 +56,7 @@ def save_generated_image(image_data: bytes, filename: Optional[str] = None) -> s
     Returns:
         str: 保存后的文件路径
     """
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = Path(__file__).resolve().parent.parent.parent
     output_dir = base_dir / settings.OUTPUT_DIR
     ensure_directory(str(output_dir))
 
@@ -80,7 +80,7 @@ def create_task_dir(task_id: str) -> Path:
     Returns:
         Path: 任务目录路径
     """
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = Path(__file__).resolve().parent.parent.parent
     task_dir = base_dir / settings.OUTPUT_DIR / task_id
     ensure_directory(str(task_dir))
     return task_dir
@@ -154,7 +154,7 @@ def clean_output_dir(max_age_days: int = 7) -> int:
     Returns:
         int: 清理的文件数量
     """
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = Path(__file__).resolve().parent.parent.parent
     output_dir = base_dir / settings.OUTPUT_DIR
 
     if not output_dir.exists():
@@ -203,7 +203,7 @@ def create_output_directory(platform: str, product_name: str) -> str:
     dir_name = f"{safe_product}_{timestamp}"
 
     # 构建完整路径
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = Path(__file__).resolve().parent.parent.parent
     output_path = base_dir / settings.OUTPUT_DIR / platform / dir_name
     ensure_directory(str(output_path))
 
@@ -398,7 +398,7 @@ def cleanup_old_outputs(days: int = 30) -> dict:
             "total_size_freed_mb": 45.2
         }
     """
-    base_dir = Path(__file__).resolve().parent.parent
+    base_dir = Path(__file__).resolve().parent.parent.parent
     output_dir = base_dir / settings.OUTPUT_DIR
 
     if not output_dir.exists():

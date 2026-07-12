@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI 主应用入口
 
 提供 REST API 端点:
@@ -662,7 +662,7 @@ async def web_ui():
     """电商智能生图平台 Web 界面"""
     static_index = Path(__file__).resolve().parent / "static" / "index.html"
     if static_index.exists():
-        return HTMLResponse(content=static_index.read_text(encoding="utf-8"))
+        return HTMLResponse(content=static_index.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
 
 
 # ---- 根路由 ----
@@ -737,13 +737,18 @@ async def pipeline_ecommerce_assets(
     upload_dir = base_dir / settings.OUTPUT_DIR / "uploads"
     ensure_directory(str(upload_dir))
 
+    # 0. 文件大小校验（最大20MB）
+    MAX_UPLOAD_SIZE = 20 * 1024 * 1024
+    image_bytes = await product_image.read()
+    if len(image_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="图片文件过大，最大支持 20MB")
+
     # 生成唯一文件名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
     ext = Path(product_image.filename).suffix if product_image.filename else ".png"
     original_filename = f"product_{timestamp}{ext}"
     original_path = upload_dir / original_filename
 
-    image_bytes = await product_image.read()
     with open(original_path, "wb") as f:
         f.write(image_bytes)
 
@@ -763,7 +768,7 @@ async def pipeline_ecommerce_assets(
             asyncio.to_thread(
                 ImagePreprocessor.make_white_background,
                 str(original_path),
-                (1600, 1600),
+                (800, 800),
             ),
             timeout=_PROCESSING_TIMEOUT,
         )

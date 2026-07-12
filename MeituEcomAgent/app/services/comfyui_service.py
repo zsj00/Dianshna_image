@@ -1,4 +1,4 @@
-"""
+﻿"""
 ComfyUI API调用服务 - 与ComfyUI后端通信
 
 功能:
@@ -43,6 +43,11 @@ class ComfyUITimeoutError(ComfyUIError):
 
     pass
 
+
+class ComfyUIExecutionError(ComfyUIError):
+    """任务执行失败异常（ComfyUI返回error状态）"""
+
+    pass
 
 class ComfyUIClient:
     """ComfyUI API 异步客户端"""
@@ -283,6 +288,26 @@ class ComfyUIClient:
                     status_str = status.get("status_str", "")
                     completed = status.get("completed", True)
 
+                    # 检测执行错误状态（"error"），避免死等
+                    if status_str == "error":
+                        ws_task.cancel()
+                        try:
+                            await ws_task
+                        except asyncio.CancelledError:
+                            pass
+                        error_msg = "未知执行错误"
+                        try:
+                            messages = status.get("messages", [])
+                            if messages:
+                                last_msg = messages[-1]
+                                if isinstance(last_msg, list) and len(last_msg) > 1:
+                                    error_msg = str(last_msg[1])
+                        except Exception:
+                            pass
+                        raise ComfyUIExecutionError(
+                            f"ComfyUI执行失败: prompt_id={prompt_id}, error={error_msg}"
+                        )
+
                     if completed:
                         logger.info(
                             "任务执行完成 | prompt_id=%s | status=%s",
@@ -398,7 +423,7 @@ class ComfyUIClient:
                 "image",
                 image_bytes,
                 filename=filename,
-                content_type="image/png",
+                content_type="image/png" if filename.lower().endswith(".png") else "image/jpeg",
             )
 
             # 尝试 overwrite 参数

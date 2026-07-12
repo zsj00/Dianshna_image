@@ -1,4 +1,4 @@
-"""
+﻿"""
 图片预处理工具 — AI抠图、白底合成、尺寸调整
 
 依赖: rembg + Pillow
@@ -39,7 +39,7 @@ class ImagePreprocessor:
             ImageProcessorError: 处理失败
         """
         try:
-            from rembg import remove
+            from rembg import remove, new_session
         except ImportError:
             raise ImageProcessorError("请安装 rembg: pip install rembg")
 
@@ -49,7 +49,8 @@ class ImagePreprocessor:
 
         try:
             input_bytes = src.read_bytes()
-            output_bytes = remove(input_bytes, model_name="u2netp")
+            session = new_session("u2netp")
+            output_bytes = remove(input_bytes, session=session)
             logger.info("去背景完成 | input=%s | output_size=%d bytes", src.name, len(output_bytes))
             return output_bytes
         except Exception as e:
@@ -58,7 +59,7 @@ class ImagePreprocessor:
     @staticmethod
     def make_white_background(
         image_path: str,
-        target_size: Tuple[int, int] = (1600, 1600),
+        target_size: Tuple[int, int] = (800, 800),
         product_ratio_min: float = 0.75,
     ) -> bytes:
         """
@@ -82,7 +83,7 @@ class ImagePreprocessor:
             ImageProcessorError: 处理失败
         """
         try:
-            from rembg import remove
+            from rembg import remove, new_session
         except ImportError:
             raise ImageProcessorError("请安装 rembg: pip install rembg")
 
@@ -93,7 +94,8 @@ class ImagePreprocessor:
         try:
             # 1. 去背景（使用轻量 u2netp 模型 ~4MB，比 u2net 快 10 倍）
             input_bytes = src.read_bytes()
-            foreground_bytes = remove(input_bytes, model_name="u2netp")
+            session = new_session("u2netp")
+            foreground_bytes = remove(input_bytes, session=session)
             foreground = Image.open(io.BytesIO(foreground_bytes)).convert("RGBA")
 
             # 2. 创建目标画布

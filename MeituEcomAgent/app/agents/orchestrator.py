@@ -1,4 +1,4 @@
-"""
+﻿"""
 Agent系统总调度器
 
 负责串联所有Agent并实现"生成→审核→不合规则重绘"的闭环。
@@ -179,10 +179,20 @@ class AgentOrchestrator:
             logger.info(step_msg)
             pipeline_log.append(step_msg)
 
+            # 上传参考图到 ComfyUI（用于 img2img）
+            reference_image_name = ""
+            if reference_image:
+                try:
+                    reference_image_name = await self.image_generator.upload_reference_image(reference_image)
+                    logger.info("参考图已上传到 ComfyUI | name=%s", reference_image_name)
+                except Exception as e:
+                    logger.warning("上传参考图失败（将继续使用纯txt2img）: %s", str(e))
+
             try:
                 generated_paths = await self.image_generator.generate_image_set(
                     prompts=image_set,
-                    concurrent=True,
+                    reference_image_name=reference_image_name,
+                    selling_points=selling_points,
                 )
             except ImageGeneratorError as e:
                 self._fail_task(task_id, f"生图失败: {str(e)}")
@@ -214,6 +224,7 @@ class AgentOrchestrator:
                 type_path_map=type_path_map,
                 max_retries=max_retries,
                 pipeline_log=pipeline_log,
+                reference_image_name=reference_image_name,
             )
 
             # =================================================================
@@ -299,6 +310,7 @@ class AgentOrchestrator:
         type_path_map: Dict[str, str],
         max_retries: int,
         pipeline_log: List[str],
+        reference_image_name: str = "",
     ) -> tuple:
         """
         审核图片并在不合规时自动重试
@@ -412,12 +424,17 @@ class AgentOrchestrator:
                             resolution=self.image_generator.parse_resolution(
                                 original.get("resolution", "1024x1024")
                             ),
+                            reference_image_name=reference_image_name,
                         )
                     except ImageGeneratorError as e:
                         logger.error("重绘失败: %s", str(e))
                         pipeline_log.append(f"    ✗ 重绘失败: {str(e)}")
                         break
 
+                    # 后处理：根据图片类型优化
+                    new_path = self.image_generator._post_process(
+                        new_path, img_type
+                    )
                     pipeline_log.append(f"    ✓ 新图: {Path(new_path).name}")
 
                     # c) 重新审核

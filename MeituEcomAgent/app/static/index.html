@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>美图电商智能生图平台</title>
+<title>电商智能生图平台</title>
 <style>
 /* ============================================================
    Reset & Base
@@ -294,7 +294,7 @@ textarea { min-height: 80px; }
 <div class="app">
   <!-- Header -->
   <header class="header">
-    <div class="logo">美图电商智能生图</div>
+    <div class="logo">电商智能生图</div>
     <p class="subtitle">上传商品原图 → 选择平台 → AI 自动生成合规商品图 + 审核报告</p>
   </header>
 
@@ -674,7 +674,7 @@ function showResults(data) {
     const vioText = img.audit_result?.violations?.map(v => v.rule).join('；') || '';
     return `
       <div class="image-card">
-        <img src="${img.path ? '../output/' + img.path.split('output/').pop() : ''}" alt="${img.type}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231a1a2e%22 width=%22200%22 height=%22200%22/><text fill=%22%23888%22 x=%22100%22 y=%22100%22 text-anchor=%22middle%22 dy=%22.3em%22 font=%2214px sans-serif%22>图片未找到</text></svg>'">
+        <img src="${img.path ? '/output/' + img.path.replace(/\\/g, '/').split('output/').pop() : ''}" alt="${img.type}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22200%22><rect fill=%22%231a1a2e%22 width=%22200%22 height=%22200%22/><text fill=%22%23888%22 x=%22100%22 y=%22100%22 text-anchor=%22middle%22 dy=%22.3em%22 font=%2214px sans-serif%22>image not found</text></svg>'">
         <div class="img-meta">
           <div class="img-type">
             ${getTypeLabel(img.type)}
