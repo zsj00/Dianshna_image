@@ -1,4 +1,4 @@
-# MeituEcomAgent (Dianshna Image)
+# EcomAgent (Dianshna Image)
 
 > Multi-Agent E-Commerce Product Image Generation & Compliance Checking System
 > 基于多智能体协作的跨平台商品图片自动生成与合规审核系统
