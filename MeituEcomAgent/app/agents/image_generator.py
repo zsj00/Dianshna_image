@@ -769,19 +769,21 @@ class ImageGeneratorAgent:
                 )
                 return reference_locked_path
 
-            if self._should_generate_scene_background(image_type, white_bg_path):
+            scene_background_only = self._should_generate_scene_background(image_type, white_bg_path)
+            if scene_background_only:
                 positive, negative = self._build_scene_background_prompt(
                     positive_prompt=positive,
                     negative_prompt=negative,
                     selling_points=selling_points,
                 )
-            positive, negative = self._enhance_prompt_for_consistency(
-                positive_prompt=positive,
-                negative_prompt=negative,
-                image_type=image_type,
-                selling_points=selling_points,
-                reference_image_name=reference_image_name,
-            )
+            else:
+                positive, negative = self._enhance_prompt_for_consistency(
+                    positive_prompt=positive,
+                    negative_prompt=negative,
+                    image_type=image_type,
+                    selling_points=selling_points,
+                    reference_image_name=reference_image_name,
+                )
             resolution = self.parse_resolution(resolution_str)
 
             workflow = {}
@@ -842,7 +844,7 @@ class ImageGeneratorAgent:
         selling_points: str = "",
     ) -> str:
         """对强一致性图片直接基于上传原图生成，避免云端文生图改造商品。"""
-        if not cls._is_cloud_like_provider() or not reference_image_name:
+        if not reference_image_name:
             return ""
 
         if image_type == "white_bg_main":
@@ -859,8 +861,8 @@ class ImageGeneratorAgent:
 
     @classmethod
     def _should_generate_scene_background(cls, image_type: str, white_bg_path: str = "") -> bool:
-        """场景图在云端模式下先生成空背景，再用原商品融合。"""
-        return cls._is_cloud_like_provider() and image_type == "scene_lifestyle" and bool(white_bg_path)
+        """场景图先生成空背景，再用原商品融合。"""
+        return image_type == "scene_lifestyle" and bool(white_bg_path)
 
     @staticmethod
     def _build_scene_background_prompt(

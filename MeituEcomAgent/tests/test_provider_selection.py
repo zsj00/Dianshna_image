@@ -64,6 +64,29 @@ class TestProviderSelection(unittest.TestCase):
         finally:
             settings.IMAGE_PROVIDER = original_provider
 
+    def test_comfyui_provider_also_uses_reference_locked_main_image(self):
+        original_provider = settings.IMAGE_PROVIDER
+        settings.IMAGE_PROVIDER = "comfyui"
+        try:
+            temp_root = Path.cwd() / "output" / "test_tmp"
+            temp_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=temp_root) as temp_name:
+                temp_dir = Path(temp_name)
+                reference_path = temp_dir / "reference.png"
+                Image.new("RGBA", (300, 420), (210, 190, 170, 255)).save(reference_path)
+
+                output_path = ImageGeneratorAgent._generate_reference_locked_asset(
+                    image_type="white_bg_main",
+                    reference_image_name=str(reference_path),
+                    selling_points="稳定锁图",
+                )
+
+                self.assertTrue(Path(output_path).exists())
+                with Image.open(output_path) as result:
+                    self.assertEqual(result.size, (1200, 1200))
+        finally:
+            settings.IMAGE_PROVIDER = original_provider
+
     def test_scene_background_prompt_excludes_product_objects(self):
         positive, negative = ImageGeneratorAgent._build_scene_background_prompt(
             positive_prompt="premium bathroom scene",
