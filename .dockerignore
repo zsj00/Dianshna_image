@@ -1,0 +1,16 @@
+.data/
+.git/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+!.env.example
+output/
+logs/
+knowledge_base_index/
+venv/
+.venv/
+build/
+dist/

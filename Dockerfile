@@ -9,8 +9,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.lis
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
-        libgomp1 libjpeg62-turbo libpng16-16 libwebp7 gcc g++ \
+        gcc g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -28,15 +27,14 @@ RUN echo "deb http://deb.debian.org/debian bookworm main" > /etc/apt/sources.lis
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libgomp1 \
-        libjpeg62-turbo libpng16-16 libwebp7 curl \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 RUN groupadd -r appuser && useradd -r -g appuser -m appuser
-RUN mkdir -p knowledge_base knowledge_base_index workflows output \
+RUN mkdir -p knowledge_base .data/knowledge_base_index workflows output logs \
     && chown -R appuser:appuser /app
 
 COPY --chown=appuser:appuser . .

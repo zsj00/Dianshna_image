@@ -1,4 +1,4 @@
-﻿"""
+"""
 规则解析Agent - 负责解析输入的规则文本，提取结构化信息
 
 核心功能:
@@ -275,6 +275,16 @@ class RuleParserAgent:
                         "image_set[%s] 为纯字符串，已自动包装为标准 dict 格式",
                         img_type,
                     )
+            product_identity = self._build_product_identity(
+                product_desc=product_desc,
+                visual_analysis=visual_analysis,
+                selling_points=selling_points,
+            )
+            self._stabilize_image_prompts(
+                image_set=image_set,
+                product_identity=product_identity,
+                selling_points=selling_points,
+            )
 
         logger.info(
             "解析完成 | platform=%s | image_types=%s | checklist_items=%d",
@@ -283,6 +293,53 @@ class RuleParserAgent:
             len(result.get("compliance_checklist", [])),
         )
         return result
+
+    def _build_product_identity(
+        self,
+        product_desc: str,
+        visual_analysis: str = "",
+        selling_points: Optional[str] = None,
+    ) -> str:
+        """构造跨图片共用的商品身份锚点。"""
+        identity_parts = [
+            f"source product identity: {product_desc.strip()}",
+            "same exact SKU in every image, identical jar shape, identical lid, identical cream color, identical label placement, identical product scale",
+        ]
+        if visual_analysis:
+            identity_parts.append(f"visual identity from uploaded reference image: {visual_analysis.strip()}")
+        if selling_points:
+            identity_parts.append(f"core selling points to express visually: {selling_points.strip()}")
+        identity_parts.append(f"online reference style benchmark: {settings.ONLINE_REFERENCE_STYLE}")
+        return "; ".join(part for part in identity_parts if part)
+
+    def _stabilize_image_prompts(
+        self,
+        image_set: dict,
+        product_identity: str,
+        selling_points: Optional[str] = None,
+    ) -> None:
+        """统一增强四张图的商品一致性和卖点表达。"""
+        common_negative = (
+            "different product, changed container shape, changed lid shape, changed color, "
+            "wrong label, random brand, unreadable fake text, extra products, watermark, logo mismatch, "
+            "deformed object, low quality, blurry, overexposed, cluttered background"
+        )
+        for image_type, prompt_data in image_set.items():
+            if not isinstance(prompt_data, dict):
+                continue
+            prompt = prompt_data.get("prompt_en", "")
+            selling_point_text = f"visualize selling points: {selling_points}. " if selling_points else ""
+            prompt_data["prompt_en"] = (
+                f"{prompt}\n\n"
+                f"CONSISTENCY LOCK: {product_identity}. "
+                "The product must remain the same object across the full image set; only camera angle, crop, and background may change. "
+                f"{selling_point_text}"
+                f"Image role: {image_type}."
+            ).strip()
+            negative = prompt_data.get("negative_prompt", "")
+            prompt_data["negative_prompt"] = ", ".join(
+                part for part in [negative, common_negative] if part
+            )
 
     async def generate_single_prompt(
         self,
@@ -468,6 +525,65 @@ class RuleParserAgent:
             return ""
 
     # ==================== Prompt 构造方法 ====================
+
+    async def suggest_selling_points_from_image(
+        self,
+        image_path: str,
+        platform: str = "taobao",
+    ) -> dict:
+        """根据商品图片自动生成电商卖点文案。"""
+        visual_analysis = await self._analyze_reference_image(
+            image_path=image_path,
+            product_desc="请识别商品品类、外观材质、容量规格、使用场景和可视化卖点。",
+        )
+        if not visual_analysis:
+            raise LLMCallError("无法从商品图片提取视觉信息，请检查图片或视觉模型配置")
+
+        system_prompt = """
+你是资深电商商品文案策划，擅长根据商品图片提炼真实、合规、可视觉化表达的卖点。
+必须只基于图片可见信息和常识化描述，不得编造医疗功效、绝对化承诺、虚假认证或无法从图片判断的参数。
+返回严格 JSON，不要 markdown。
+"""
+        user_prompt = f"""
+## 目标平台
+{platform}
+
+## 商品图片视觉分析
+{visual_analysis}
+
+## 输出要求
+1. 生成 4-6 个短卖点，每个卖点 4-12 个中文字符，适合用 “ | ” 拼接。
+2. 优先覆盖：品类/容量、材质质感、外观设计、使用场景、便携/送礼/高级感。
+3. 如果图片中没有明确文字或容量，不要编造具体容量；可写“便携小罐”“精致容量”等。
+4. 不要出现“第一、最、100%、永久、治疗、祛斑、药效”等高风险词。
+
+JSON 格式：
+{{
+  "product_summary": "一句话商品视觉摘要",
+  "points": ["卖点1", "卖点2", "卖点3", "卖点4"],
+  "selling_points": "卖点1 | 卖点2 | 卖点3 | 卖点4"
+}}
+"""
+        raw_response = await self._call_llm(system_prompt, user_prompt)
+        try:
+            result = json.loads(raw_response)
+        except json.JSONDecodeError:
+            raw_response = self._extract_json_from_text(raw_response)
+            result = json.loads(raw_response)
+
+        points = result.get("points", [])
+        if not isinstance(points, list):
+            points = []
+        safe_points = [str(point).strip() for point in points if str(point).strip()][:6]
+        selling_points = str(result.get("selling_points") or " | ".join(safe_points)).strip()
+        if not selling_points:
+            raise LLMCallError("卖点生成结果为空")
+
+        return {
+            "product_summary": str(result.get("product_summary", "")).strip(),
+            "points": safe_points,
+            "selling_points": selling_points,
+        }
 
     def _build_system_prompt(self) -> str:
         """构造系统提示词 - 全量生图场景"""

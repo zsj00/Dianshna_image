@@ -284,6 +284,8 @@ textarea { min-height: 80px; }
   .header .logo { font-size: 1.6rem; }
 }
 </style>
+<link rel="stylesheet" href="./static/premium.css?v=20260718">
+<link rel="stylesheet" href="/static/premium.css?v=20260718">
 </head>
 <body>
 
@@ -294,13 +296,14 @@ textarea { min-height: 80px; }
 <div class="app">
   <!-- Header -->
   <header class="header">
-    <div class="logo">电商智能生图</div>
-    <p class="subtitle">上传商品原图 → 选择平台 → AI 自动生成合规商品图 + 审核报告</p>
+    <div class="eyebrow">Dianshna Image · Cloud Agent Studio</div>
+    <div class="logo">电商智能生图工作台</div>
+    <p class="subtitle">上传商品原图，自动生成平台合规素材、视觉审核报告与可归档交付物。</p>
   </header>
 
   <!-- Step Indicator -->
   <div class="steps" id="stepIndicator">
-    <div class="step" data-step="upload"><span class="step-num">1<sup>step</sup></span> 上传图片</div>
+    <div class="step" data-step="upload"><span class="step-num">1</span> 上传图片</div>
     <div class="step" data-step="parse"><span class="step-num">2</span> 规则解析</div>
     <div class="step" data-step="generate"><span class="step-num">3</span> AI 生图</div>
     <div class="step" data-step="audit"><span class="step-num">4</span> 合规审核</div>
@@ -311,7 +314,7 @@ textarea { min-height: 80px; }
   <div class="card" id="configCard">
     <div class="card-header">
       <span class="icon">&#x1F4F7;</span>
-      <h2>上传商品原图 & 配置参数</h2>
+      <h2>创建电商素材任务</h2>
     </div>
 
     <!-- Upload Zone -->
@@ -320,7 +323,7 @@ textarea { min-height: 80px; }
         <div id="uploadPlaceholder">
           <div class="dz-icon">&#x1F5BC;</div>
           <div class="dz-text">点击或拖拽上传商品原图</div>
-          <div class="dz-hint">支持 JPG / PNG / WebP，建议 ≥ 800×800px</div>
+          <div class="dz-hint">支持 JPG / PNG / WebP，建议 ≥ 800×800px，白底或干净背景效果更佳</div>
         </div>
         <div id="uploadPreview" style="display:none">
           <img class="preview-img" id="previewImage" alt="预览">
@@ -356,6 +359,12 @@ textarea { min-height: 80px; }
     <!-- Selling Points -->
     <div class="form-group">
       <label>&#x2728; 商品卖点文案</label>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <button class="btn-xs" type="button" id="autoSellingBtn" onclick="generateSellingPoints()">
+          &#x1F9E0; 根据商品图自动生成卖点
+        </button>
+        <span id="sellingStatus" style="font-size:0.82rem;color:var(--text-muted)"></span>
+      </div>
       <textarea id="sellingPoints" placeholder="例：350ml大容量 | 食品级陶瓷 | 哑光釉面 | 北欧简约设计 | 送礼佳品"
         maxlength="5000"></textarea>
       <div class="char-count"><span id="charCount">0</span>/5000</div>
@@ -372,7 +381,7 @@ textarea { min-height: 80px; }
 
     <!-- Submit Button -->
     <button class="btn btn-primary" id="submitBtn" onclick="submitPipeline()">
-      &#x1F680; 开始生成
+      &#x1F680; 生成高级商品素材
     </button>
   </div>
 
@@ -490,6 +499,42 @@ const sellingInput = document.getElementById('sellingPoints');
 const charCount = document.getElementById('charCount');
 sellingInput.addEventListener('input', () => charCount.textContent = sellingInput.value.length);
 
+async function generateSellingPoints() {
+  if (!selectedFile) { showToast('请先上传商品原图', 'error'); return; }
+  const platform = selectedPlatform || 'taobao';
+  const btn = document.getElementById('autoSellingBtn');
+  const status = document.getElementById('sellingStatus');
+  const formData = new FormData();
+  formData.append('product_image', selectedFile);
+  formData.append('platform', platform);
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 正在识别卖点...';
+  status.textContent = '正在分析商品外观、材质和可视化卖点';
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/selling-points/from-image`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    sellingInput.value = data.selling_points || '';
+    charCount.textContent = sellingInput.value.length;
+    status.textContent = data.product_summary ? `已生成：${data.product_summary}` : '已生成卖点，可继续编辑';
+    showToast('卖点已自动生成，可按需微调', 'success');
+  } catch (e) {
+    status.textContent = '自动生成失败，请手动填写或稍后重试';
+    showToast('自动生成卖点失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '&#x1F9E0; 根据商品图自动生成卖点';
+  }
+}
+
 /* ============================================================
    Max Retries Slider
    ============================================================ */
@@ -503,8 +548,13 @@ document.getElementById('maxRetries').addEventListener('input', function() {
 async function submitPipeline() {
   if (!selectedFile) { showToast('请先上传商品原图', 'error'); return; }
   if (!selectedPlatform) { showToast('请选择目标平台', 'error'); return; }
-  const sellingPoints = sellingInput.value.trim();
-  if (!sellingPoints) { showToast('请填写商品卖点文案', 'error'); return; }
+  let sellingPoints = sellingInput.value.trim();
+  if (!sellingPoints) {
+    showToast('未填写卖点，正在自动生成...', 'info');
+    await generateSellingPoints();
+    sellingPoints = sellingInput.value.trim();
+  }
+  if (!sellingPoints) { showToast('请填写或自动生成商品卖点文案', 'error'); return; }
 
   const formData = new FormData();
   formData.append('product_image', selectedFile);
@@ -545,7 +595,7 @@ async function submitPipeline() {
   } catch (e) {
     showToast('提交失败: ' + e.message, 'error');
     document.getElementById('submitBtn').disabled = false;
-    document.getElementById('submitBtn').innerHTML = '&#x1F680; 开始生成';
+    document.getElementById('submitBtn').innerHTML = '&#x1F680; 生成高级商品素材';
   }
 }
 
@@ -577,8 +627,14 @@ async function pollTask() {
 
     if (!resp.ok) {
       if (resp.status === 404) {
-        // 任务可能刚创建，后台还没就绪→静默重试
-        document.getElementById('progressText').textContent = '任务初始化中，请稍候...';
+        // 任务已不在内存中，通常是服务重启导致，继续轮询没有意义。
+        clearTimeout(pollTimer);
+        pollTimer = null;
+        currentTaskId = null;
+        document.getElementById('progressStatus').textContent = '任务已失效';
+        document.getElementById('progressText').textContent = '服务已重启，原任务已停止。请重新提交任务。';
+        addLog('任务已失效：服务重启后无法恢复内存中的旧任务，请重新提交。', 'warning');
+        showToast('服务已重启，请重新提交任务', 'warning');
         return;
       }
       throw new Error(`HTTP ${resp.status}`);
@@ -609,7 +665,7 @@ async function pollTask() {
         `服务暂时响应慢，正在自动重试（第 ${pollFailCount} 次）...`;
     } else {
       document.getElementById('progressText').textContent =
-        `持续等待中（已重试 ${pollFailCount} 次）——请确保 ComfyUI 等服务已启动`;
+        `持续等待中（已重试 ${pollFailCount} 次）——请确认图片生成服务与 API 配置可用`;
     }
   }
 }
@@ -658,7 +714,7 @@ function showResults(data) {
   }
 
   // Stats
-  const stats = data.report?.compliance_stats || {};
+  const stats = data.compliance_stats || data.report?.compliance_stats || {};
   document.getElementById('summaryStats').innerHTML = `
     <div class="stat-card"><div class="stat-val">${stats.total || data.images?.length || 0}</div><div class="stat-label">生成图片</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--success)">${stats.compliant ?? '-'}</div><div class="stat-label">合规通过</div></div>
@@ -714,7 +770,7 @@ function resetPipeline() {
   document.getElementById('resultsSection').classList.remove('visible');
   document.getElementById('progressBar').style.width = '0%';
   document.getElementById('submitBtn').disabled = false;
-  document.getElementById('submitBtn').innerHTML = '&#x1F680; 开始生成';
+  document.getElementById('submitBtn').innerHTML = '&#x1F680; 生成高级商品素材';
   resetUpload();
   document.getElementById('sellingPoints').value = '';
   charCount.textContent = '0';

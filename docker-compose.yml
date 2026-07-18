@@ -1,7 +1,8 @@
 ﻿# ============================================================
 # MeituEcomAgent - Docker Compose 编排配置
 # ============================================================
-# 启动: docker compose up -d
+# 生产启动: docker compose up -d
+# 本地 ComfyUI/dev: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 # 停止: docker compose down
 # 查看日志: docker compose logs -f api
 # ============================================================
@@ -22,19 +23,17 @@ services:
     env_file:
       - .env
     environment:
-      # ---- rembg 模型缓存目录 ----
-      - U2NET_HOME=/app/.u2net
+      - IMAGE_PROVIDER=${IMAGE_PROVIDER:-cloud}
+      - ENABLE_LOCAL_PREPROCESSING=${ENABLE_LOCAL_PREPROCESSING:-false}
+      - RAG_PERSIST_DIR=/app/.data/knowledge_base_index
+      - OUTPUT_DIR=/app/output
+      - LOG_FILE=/app/logs/app.log
+      - U2NET_HOME=/app/.data/u2net
     volumes:
-      # 挂载规则文件（只读）
       - ./knowledge_base:/app/knowledge_base:ro
-      # 持久化 RAG 向量索引
-      - rag_index_data:/app/knowledge_base_index
-      # 挂载应用代码（开发模式：改代码即时生效，无需重建）
-      - ./app:/app/app
-      # 挂载 ComfyUI 工作流文件
-      - ./workflows:/app/workflows:ro
-      # 持久化生成的图片和报告
-      - output_data:/app/output
+      - ./.data/knowledge_base_index:/app/.data/knowledge_base_index
+      - ./output:/app/output
+      - ./logs:/app/logs
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/v1/health" ]
       interval: 30s
@@ -43,17 +42,6 @@ services:
       retries: 3
     networks:
       - meitu-network
-
-# ============================================================
-# 数据卷
-# ============================================================
-volumes:
-  # RAG 向量索引持久化
-  rag_index_data:
-    driver: local
-  # 生成的图片和报告持久化
-  output_data:
-    driver: local
 
 # ============================================================
 # 网络

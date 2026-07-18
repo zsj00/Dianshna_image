@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# 本地图片预处理/ComfyUI 开发模式可选依赖，生产部署默认不需要。
+rembg==2.0.57

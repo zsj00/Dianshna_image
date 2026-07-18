@@ -13,6 +13,7 @@ from app.models.schemas import (
     HealthCheckResponse,
     RuleInfo,
     PipelineFormRequest,
+    SellingPointSuggestionResponse,
 )
 
 
@@ -107,6 +108,20 @@ class TestPipelineFormRequest(unittest.TestCase):
         )
         self.assertEqual(req.platform, "amazon")
         self.assertIn("陶瓷", req.selling_points)
+
+
+class TestSellingPointSuggestionResponse(unittest.TestCase):
+    """自动卖点响应模型测试"""
+
+    def test_response(self):
+        resp = SellingPointSuggestionResponse(
+            selling_points="精致小罐 | 黑色亮盖 | 细腻膏体",
+            points=["精致小罐", "黑色亮盖", "细腻膏体"],
+            product_summary="一款精致面霜罐商品",
+        )
+
+        self.assertIn("精致小罐", resp.selling_points)
+        self.assertEqual(len(resp.points), 3)
 
 
 class TestHealthCheckResponse(unittest.TestCase):
