@@ -68,7 +68,7 @@ class ProductCardsTestCase(unittest.TestCase):
                 result = image.convert("RGB")
             blank = Image.new("RGB", result.size, (255, 255, 255))
             diff_bbox = ImageChops.difference(result, blank).getbbox()
-            self.assertEqual(result.size, (1400, 1200))
+            self.assertEqual(result.size, (1200, 1200))
             self.assertIsNotNone(diff_bbox)
 
 

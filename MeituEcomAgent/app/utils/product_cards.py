@@ -1,9 +1,10 @@
 """基于上传原图生成确定性交付图，避免云端模型重画商品。"""
 import logging
+import re
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 logger = logging.getLogger(__name__)
 
@@ -16,20 +17,13 @@ class ProductCardError(Exception):
 
 def create_white_main_from_reference(image_path: str, output_path: Optional[str] = None) -> str:
     """使用上传原图生成平台白底主图。"""
-    path = Path(image_path)
-    if not path.exists():
-        raise ProductCardError(f"商品原图不存在: {image_path}")
+    path = _ensure_image_exists(image_path)
 
     with Image.open(path) as img:
-        product = img.convert("RGBA")
-        canvas_size = 1200
-        margin = int(canvas_size * 0.08)
-        max_side = canvas_size - margin * 2
-        scale = min(max_side / product.width, max_side / product.height)
-        new_size = (max(1, int(product.width * scale)), max(1, int(product.height * scale)))
-        product = product.resize(new_size, Image.LANCZOS)
-        canvas = Image.new("RGBA", (canvas_size, canvas_size), (255, 255, 255, 255))
-        pos = ((canvas_size - new_size[0]) // 2, (canvas_size - new_size[1]) // 2)
+        product = _trim_transparent_border(img.convert("RGBA"))
+        product = _resize_to_fit(product, 1030, 1030)
+        canvas = Image.new("RGBA", (1200, 1200), (255, 255, 255, 255))
+        pos = ((1200 - product.width) // 2, (1200 - product.height) // 2)
         canvas.paste(product, pos, product)
         output = Path(output_path) if output_path else path.parent / (path.stem + "_main_white.jpg")
         canvas.convert("RGB").save(output, "JPEG", quality=96)
@@ -39,19 +33,17 @@ def create_white_main_from_reference(image_path: str, output_path: Optional[str]
 
 def create_detail_from_reference(image_path: str, output_path: Optional[str] = None) -> str:
     """使用上传原图生成细节特写。"""
-    path = Path(image_path)
-    if not path.exists():
-        raise ProductCardError(f"商品原图不存在: {image_path}")
+    path = _ensure_image_exists(image_path)
 
     with Image.open(path) as img:
-        source = img.convert("RGBA")
+        source = _trim_transparent_border(img.convert("RGBA"))
         width, height = source.size
-        crop_width = int(width * 0.62)
-        crop_height = int(height * 0.62)
+        crop_width = max(1, int(width * 0.64))
+        crop_height = max(1, int(height * 0.64))
         left = max(0, (width - crop_width) // 2)
         top = max(0, (height - crop_height) // 2)
         detail = source.crop((left, top, left + crop_width, top + crop_height))
-        detail.thumbnail((1200, 1200), Image.LANCZOS)
+        detail = _resize_to_fit(detail, 1120, 1120)
         canvas = Image.new("RGBA", (1200, 1200), (255, 255, 255, 255))
         pos = ((1200 - detail.width) // 2, (1200 - detail.height) // 2)
         canvas.paste(detail, pos, detail)
@@ -66,108 +58,189 @@ def create_dimension_sheet_from_reference(
     selling_points: str = "",
     output_path: Optional[str] = None,
 ) -> str:
-    """使用上传原图生成清晰尺寸标注图。"""
-    path = Path(image_path)
-    if not path.exists():
-        raise ProductCardError(f"商品原图不存在: {image_path}")
+    """使用上传原图生成电商风格尺寸标注图。"""
+    path = _ensure_image_exists(image_path)
 
     with Image.open(path) as img:
-        product = img.convert("RGBA")
-        canvas_width, canvas_height = 1400, 1200
-        canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 255))
-        max_width, max_height = 760, 680
-        scale = min(max_width / product.width, max_height / product.height)
-        new_size = (max(1, int(product.width * scale)), max(1, int(product.height * scale)))
-        product = product.resize(new_size, Image.LANCZOS)
-        product_x = 230
-        product_y = 260
-        canvas.paste(product, (product_x, product_y), product)
+        product = _trim_transparent_border(img.convert("RGBA"))
+        product = _resize_to_fit(product, 560, 760)
+        canvas = Image.new("RGBA", (1200, 1200), (255, 255, 255, 255))
         draw = ImageDraw.Draw(canvas)
+        title_font, label_font, value_font, small_font = _load_fonts()
 
-        title_font, label_font, small_font = _load_fonts()
-        line_color = (32, 40, 55, 255)
-        muted = (92, 105, 125, 255)
-        accent = (181, 125, 61, 255)
+        line_color = (33, 37, 41, 255)
+        muted = (108, 117, 125, 255)
+        accent = (180, 126, 65, 255)
+        soft = (246, 242, 236, 255)
+
+        draw.text((76, 58), "Product Dimensions", fill=line_color, font=title_font)
+        draw.text((78, 112), "Same uploaded product. Measurements are visual references.", fill=muted, font=small_font)
+        draw.line((76, 158, 1124, 158), fill=(232, 235, 239, 255), width=2)
+
+        product_x = 250 + (420 - product.width) // 2
+        product_y = 250 + (720 - product.height) // 2
+        _paste_with_soft_shadow(canvas, product, product_x, product_y)
+
         x1, y1 = product_x, product_y
-        x2, y2 = product_x + new_size[0], product_y + new_size[1]
+        x2, y2 = product_x + product.width, product_y + product.height
+        dimensions = _estimate_dimensions(product.width, product.height, selling_points)
 
-        draw.text((70, 56), "Product Size Reference", fill=line_color, font=title_font)
-        draw.text((72, 112), "Same uploaded product, visual measurement guide", fill=muted, font=small_font)
+        width_y = min(1015, y2 + 78)
+        _draw_measure_line(draw, (x1, width_y), (x2, width_y), line_color)
+        _draw_center_label(draw, f"W  {dimensions['width']}", (x1 + x2) // 2, width_y + 24, value_font, accent)
 
-        width_y = y2 + 72
-        _draw_double_arrow(draw, (x1, width_y), (x2, width_y), line_color)
-        draw.text(((x1 + x2) // 2 - 85, width_y + 18), "Width", fill=line_color, font=label_font)
+        height_x = min(720, x2 + 86)
+        _draw_measure_line(draw, (height_x, y1), (height_x, y2), line_color)
 
-        height_x = x2 + 80
-        _draw_double_arrow(draw, (height_x, y1), (height_x, y2), line_color)
-        draw.text((height_x + 28, (y1 + y2) // 2 - 20), "Height", fill=line_color, font=label_font)
+        depth_y = max(220, y1 - 58)
+        depth_x1 = x1 + max(12, int(product.width * 0.16))
+        depth_x2 = x2 - max(12, int(product.width * 0.16))
+        if depth_x2 - depth_x1 > 80:
+            _draw_measure_line(draw, (depth_x1, depth_y), (depth_x2, depth_y), line_color)
+            _draw_center_label(draw, f"D  {dimensions['depth']}", (depth_x1 + depth_x2) // 2, depth_y - 44, small_font, muted)
 
-        depth_start = (x1 + int(new_size[0] * 0.18), y1 + int(new_size[1] * 0.18))
-        depth_end = (depth_start[0] + 190, depth_start[1] + 150)
-        _draw_double_arrow(draw, depth_start, depth_end, line_color)
-        draw.text((depth_end[0] + 18, depth_end[1] - 8), "Depth", fill=line_color, font=label_font)
+        panel_x, panel_y = 790, 276
+        draw.text((height_x + 18, max(178, y1 - 46)), f"H  {dimensions['height']}", fill=accent, font=small_font)
+        draw.rounded_rectangle((panel_x, panel_y, 1108, 810), radius=26, fill=soft, outline=(229, 220, 209, 255), width=2)
+        draw.text((panel_x + 36, panel_y + 36), "SIZE INFO", fill=accent, font=label_font)
+        _draw_size_item(draw, panel_x + 36, panel_y + 116, "Height", dimensions["height"], value_font, small_font)
+        _draw_size_item(draw, panel_x + 36, panel_y + 220, "Width", dimensions["width"], value_font, small_font)
+        _draw_size_item(draw, panel_x + 36, panel_y + 324, "Diameter / Depth", dimensions["depth"], value_font, small_font)
+        if dimensions.get("volume"):
+            _draw_size_item(draw, panel_x + 36, panel_y + 428, "Capacity", dimensions["volume"], value_font, small_font)
 
-        ruler_y = canvas_height - 180
-        ruler_x = 120
-        ruler_width = 800
-        draw.rounded_rectangle(
-            (ruler_x, ruler_y, ruler_x + ruler_width, ruler_y + 44),
-            radius=8,
-            outline=muted,
-            width=3,
-        )
-        for tick in range(0, 21):
-            tick_x = ruler_x + int(ruler_width * tick / 20)
-            tick_height = 38 if tick % 5 == 0 else 24
-            draw.line([(tick_x, ruler_y), (tick_x, ruler_y + tick_height)], fill=muted, width=2)
-        draw.text((ruler_x, ruler_y + 58), "Scale ruler for visual comparison", fill=muted, font=small_font)
-
-        if selling_points:
-            points = [point.strip() for point in selling_points.replace("|", "\n").split("\n") if point.strip()]
-            box_x, box_y = 970, 260
-            draw.rounded_rectangle(
-                (box_x, box_y, 1320, 610),
-                radius=24,
-                outline=(232, 221, 207, 255),
-                fill=(253, 250, 246, 255),
-                width=2,
-            )
-            draw.text((box_x + 28, box_y + 28), "Key Selling Points", fill=accent, font=label_font)
-            for index, point in enumerate(points[:5]):
-                draw.text((box_x + 32, box_y + 88 + index * 46), f"• {point}", fill=line_color, font=small_font)
+        draw.rounded_rectangle((76, 1040, 1124, 1110), radius=18, fill=(250, 250, 250, 255), outline=(235, 238, 242, 255), width=1)
+        draw.text((104, 1062), "Tip: add exact values like H 12cm / W 4cm / D 4cm / 30ml in selling points.", fill=muted, font=small_font)
 
         output = Path(output_path) if output_path else path.parent / (path.stem + "_dimension_sheet.jpg")
         canvas.convert("RGB").save(output, "JPEG", quality=96)
-        logger.info("基于原图生成尺寸标注图 | %s -> %s", path.name, output.name)
+        logger.info("基于原图生成电商尺寸图 | %s -> %s", path.name, output.name)
         return str(output)
 
 
-def _load_fonts() -> Tuple[ImageFont.ImageFont, ImageFont.ImageFont, ImageFont.ImageFont]:
+def _ensure_image_exists(image_path: str) -> Path:
+    """检查商品原图是否存在。"""
+    path = Path(image_path)
+    if not path.exists():
+        raise ProductCardError(f"商品原图不存在: {image_path}")
+    return path
+
+
+def _trim_transparent_border(image: Image.Image) -> Image.Image:
+    """裁掉透明边缘，保留原商品像素。"""
+    alpha = image.getchannel("A")
+    bbox = alpha.getbbox()
+    if bbox:
+        return image.crop(bbox)
+    return image
+
+
+def _resize_to_fit(image: Image.Image, max_width: int, max_height: int) -> Image.Image:
+    """等比缩放图片到目标框内。"""
+    result = image.copy()
+    result.thumbnail((max_width, max_height), Image.LANCZOS)
+    return result
+
+
+def _paste_with_soft_shadow(canvas: Image.Image, product: Image.Image, x: int, y: int) -> None:
+    """粘贴商品并添加轻微自然投影。"""
+    shadow = Image.new("RGBA", product.size, (0, 0, 0, 0))
+    alpha = product.getchannel("A").filter(ImageFilter.GaussianBlur(16))
+    shadow.putalpha(alpha.point(lambda value: int(value * 0.16)))
+    canvas.alpha_composite(shadow, (x + 18, y + 24))
+    canvas.alpha_composite(product, (x, y))
+
+
+def _estimate_dimensions(width_px: int, height_px: int, selling_points: str) -> Dict[str, str]:
+    """从卖点中提取尺寸；缺失时给出视觉参考值。"""
+    extracted = _extract_dimensions(selling_points)
+    aspect = height_px / max(width_px, 1)
+    height = extracted.get("height") or ("12.0 cm" if aspect > 1.8 else "8.0 cm")
+    width = extracted.get("width") or f"{max(2.8, min(9.8, float(height.split()[0]) / aspect)):.1f} cm"
+    depth = extracted.get("depth") or width
+    dimensions = {"height": height, "width": width, "depth": depth}
+    if extracted.get("volume"):
+        dimensions["volume"] = extracted["volume"]
+    return dimensions
+
+
+def _extract_dimensions(text: str) -> Dict[str, str]:
+    """从用户卖点文案中解析常见尺寸表达。"""
+    result: Dict[str, str] = {}
+    patterns = {
+        "height": r"(?:高|高度|H)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米)",
+        "width": r"(?:宽|宽度|W)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米)",
+        "depth": r"(?:厚|深|直径|口径|D)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*(cm|厘米|mm|毫米)",
+        "volume": r"(\d+(?:\.\d+)?)\s*(ml|mL|ML|毫升|L|升)",
+    }
+    for key, pattern in patterns.items():
+        match = re.search(pattern, text or "", re.IGNORECASE)
+        if match:
+            value, unit = match.group(1), match.group(2)
+            normalized_unit = "cm" if unit in {"厘米"} else "mm" if unit in {"毫米"} else unit.lower()
+            if key == "volume":
+                normalized_unit = "ml" if normalized_unit in {"毫升"} else normalized_unit
+            result[key] = f"{value} {normalized_unit}"
+    return result
+
+
+def _load_fonts() -> Tuple[ImageFont.ImageFont, ImageFont.ImageFont, ImageFont.ImageFont, ImageFont.ImageFont]:
     """加载常用字体，失败时使用默认字体。"""
-    try:
-        return (
-            ImageFont.truetype("arial.ttf", 42),
-            ImageFont.truetype("arial.ttf", 30),
-            ImageFont.truetype("arial.ttf", 24),
-        )
-    except Exception:
-        fallback = ImageFont.load_default()
-        return fallback, fallback, fallback
+    candidates = ["msyh.ttc", "simhei.ttf", "arial.ttf"]
+    for font_name in candidates:
+        try:
+            return (
+                ImageFont.truetype(font_name, 42),
+                ImageFont.truetype(font_name, 30),
+                ImageFont.truetype(font_name, 34),
+                ImageFont.truetype(font_name, 22),
+            )
+        except Exception:
+            continue
+    fallback = ImageFont.load_default()
+    return fallback, fallback, fallback, fallback
 
 
-def _draw_double_arrow(
+def _draw_measure_line(
     draw: ImageDraw.ImageDraw,
     start: Tuple[int, int],
     end: Tuple[int, int],
     color: Tuple[int, int, int, int],
 ) -> None:
-    """绘制双向尺寸箭头。"""
-    draw.line([start, end], fill=color, width=4)
+    """绘制电商尺寸标注线。"""
+    draw.line([start, end], fill=color, width=3)
     start_x, start_y = start
     end_x, end_y = end
     if abs(end_x - start_x) >= abs(end_y - start_y):
-        draw.polygon([(start_x, start_y), (start_x + 18, start_y - 9), (start_x + 18, start_y + 9)], fill=color)
-        draw.polygon([(end_x, end_y), (end_x - 18, end_y - 9), (end_x - 18, end_y + 9)], fill=color)
+        draw.line((start_x, start_y - 16, start_x, start_y + 16), fill=color, width=3)
+        draw.line((end_x, end_y - 16, end_x, end_y + 16), fill=color, width=3)
     else:
-        draw.polygon([(start_x, start_y), (start_x - 9, start_y + 18), (start_x + 9, start_y + 18)], fill=color)
-        draw.polygon([(end_x, end_y), (end_x - 9, end_y - 18), (end_x + 9, end_y - 18)], fill=color)
+        draw.line((start_x - 16, start_y, start_x + 16, start_y), fill=color, width=3)
+        draw.line((end_x - 16, end_y, end_x + 16, end_y), fill=color, width=3)
+
+
+def _draw_center_label(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    center_x: int,
+    y: int,
+    font: ImageFont.ImageFont,
+    color: Tuple[int, int, int, int],
+) -> None:
+    """绘制居中文案。"""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    draw.text((center_x - (bbox[2] - bbox[0]) // 2, y), text, fill=color, font=font)
+
+
+def _draw_size_item(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    label: str,
+    value: str,
+    value_font: ImageFont.ImageFont,
+    small_font: ImageFont.ImageFont,
+) -> None:
+    """绘制右侧参数项。"""
+    draw.text((x, y), label, fill=(108, 117, 125, 255), font=small_font)
+    draw.text((x, y + 34), value, fill=(33, 37, 41, 255), font=value_font)
