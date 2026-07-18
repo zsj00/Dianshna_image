@@ -45,21 +45,19 @@
 
 ## 工作流程
 
-```mermaid
-flowchart LR
-    A[上传商品图] --> B[自动卖点或人工卖点]
-    B --> C[平台规则 RAG]
-    C --> D[结构化提示词]
-    D --> E{图片 Provider}
-    E -->|DashScope| F[通义万相]
-    E -->|OpenAI-compatible| G[云端图片 API]
-    E -->|可选开发模式| H[ComfyUI]
-    F --> I[四类电商素材]
-    G --> I
-    H --> I
-    I --> J[视觉合规审核]
-    J --> K[自动重试与归档]
-    K --> L[report.json]
+```text
+上传商品图
+  ↓
+自动卖点 / 人工卖点
+  ↓
+平台规则 RAG → 结构化提示词
+  ↓
+图片 Provider
+  ├─ DashScope → 通义万相
+  ├─ OpenAI-compatible → 云端图片 API
+  └─ 可选开发模式 → ComfyUI
+  ↓
+四类电商素材 → 视觉合规审核 → 自动重试与归档 → report.json
 ```
 
 ## 云端 Provider
