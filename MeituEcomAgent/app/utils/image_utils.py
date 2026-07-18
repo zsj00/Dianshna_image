@@ -1,4 +1,4 @@
-﻿"""图片处理工具函数"""
+"""图片处理工具函数"""
 import logging
 from pathlib import Path
 from typing import Optional, Tuple

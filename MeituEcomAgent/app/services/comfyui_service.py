@@ -1,4 +1,4 @@
-﻿"""
+"""
 ComfyUI API调用服务 - 与ComfyUI后端通信
 
 功能:

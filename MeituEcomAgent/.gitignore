@@ -1,8 +1,11 @@
-.env
-__pycache__/
+﻿﻿﻿﻿﻿﻿__pycache__/
 *.pyc
+*.pyo
 venv/
+.venv/
+.data/
 .env/
+.env
 knowledge_base_index/
 output/
 logs/
@@ -10,3 +13,7 @@ logs/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+*.jpg
+*.png
+!workflows/*.json

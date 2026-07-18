@@ -1,4 +1,4 @@
-﻿"""
+"""
 生图调度Agent - 负责根据解析后的规则调度图片生成流程
 
 核心功能:
@@ -21,6 +21,11 @@ from typing import Optional, Dict, List, Tuple, Any
 
 from app.config import settings
 from app.services.comfyui_service import ComfyUIClient, ComfyUIError
+from app.services.image_provider import (
+    CloudImageProvider,
+    ImageGenerationRequest,
+    ImageProviderError,
+)
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -80,7 +85,15 @@ class ImageGeneratorAgent:
         Args:
             server_address: ComfyUI 服务地址（可选，默认从配置读取）
         """
-        self.comfyui = ComfyUIClient(server_address=server_address)
+        self.provider_name = settings.IMAGE_PROVIDER
+        self.comfyui: Optional[ComfyUIClient] = None
+        self.cloud_provider: Optional[CloudImageProvider] = None
+        if settings.is_comfyui_image_provider:
+            self.comfyui = ComfyUIClient(server_address=server_address)
+        elif settings.is_cloud_image_provider:
+            self.cloud_provider = CloudImageProvider()
+        else:
+            raise ImageGeneratorError(f"不支持的图片生成 Provider: {settings.IMAGE_PROVIDER}")
 
         # 工作流目录和输出目录（使用绝对路径）
         base_dir = Path(__file__).resolve().parent.parent.parent
@@ -94,7 +107,8 @@ class ImageGeneratorAgent:
         self._tasks: Dict[str, dict] = {}
 
         logger.info(
-            "ImageGeneratorAgent initialized | workflow_dir=%s | output_dir=%s",
+            "ImageGeneratorAgent initialized | provider=%s | workflow_dir=%s | output_dir=%s",
+            self.provider_name,
             self.workflow_dir,
             self.output_dir,
         )
@@ -460,6 +474,7 @@ class ImageGeneratorAgent:
         timeout: int = 300,
         reference_image_name: str = "",
         selling_points: str = "",
+        image_type: str = "product",
     ) -> str:
         """
         提交单个生图任务，等待完成并下载图片
@@ -478,6 +493,25 @@ class ImageGeneratorAgent:
             GenerationError: 生图失败
         """
         width, height = resolution
+
+        if settings.is_cloud_image_provider:
+            if self.cloud_provider is None:
+                raise GenerationError("云端图片 Provider 未初始化")
+            try:
+                return await self.cloud_provider.generate_image(
+                    ImageGenerationRequest(
+                        positive_prompt=positive_prompt,
+                        negative_prompt=negative_prompt,
+                        resolution=(width, height),
+                        image_type=image_type,
+                        reference_image=reference_image_name,
+                    )
+                )
+            except ImageProviderError as e:
+                raise GenerationError(str(e)) from e
+
+        if self.comfyui is None:
+            raise GenerationError("ComfyUI Provider 未初始化")
 
         # 1. 注入 prompt
         workflow = self.inject_prompt(workflow, positive_prompt, negative_prompt)
@@ -584,12 +618,16 @@ class ImageGeneratorAgent:
         if not prompts:
             raise GenerationError("prompts 字典为空")
 
-        # 检查 ComfyUI 连接
-        connected = await self.comfyui.check_connection()
-        if not connected:
-            raise GenerationError(
-                f"ComfyUI 服务不可用: {self.comfyui.server_address}"
-            )
+        if settings.is_comfyui_image_provider:
+            if self.comfyui is None:
+                raise GenerationError("ComfyUI Provider 未初始化")
+            connected = await self.comfyui.check_connection()
+            if not connected:
+                raise GenerationError(
+                    f"ComfyUI 服务不可用: {self.comfyui.server_address}"
+                )
+        elif self.cloud_provider is None or not await self.cloud_provider.check_connection():
+            raise GenerationError("云端图片 Provider 配置不可用，请检查 OPENAI_API_KEY/OPENAI_BASE_URL/IMAGE_MODEL")
 
         image_types = list(prompts.keys())
         logger.info(
@@ -700,24 +738,6 @@ class ImageGeneratorAgent:
         self._update_task(task_id, status=TaskStatus.GENERATING)
 
         try:
-            # 确定工作流文件
-            workflow_name = IMAGE_TYPE_WORKFLOW_MAP.get(
-                image_type,
-                IMAGE_TYPE_WORKFLOW_MAP["_default"],
-            )
-
-            # 加载工作流
-            try:
-                workflow = self.load_workflow(workflow_name)
-            except WorkflowLoadError:
-                # 回退到默认工作流
-                logger.warning(
-                    "工作流 '%s' 不存在，使用默认工作流",
-                    workflow_name,
-                )
-                workflow_name = IMAGE_TYPE_WORKFLOW_MAP["_default"]
-                workflow = self.load_workflow(workflow_name)
-
             # 解析参数（兼容 prompt_data 为纯字符串的情况）
             if isinstance(prompt_data, str):
                 positive = prompt_data
@@ -729,6 +749,22 @@ class ImageGeneratorAgent:
                 resolution_str = prompt_data.get("resolution", "1024x1024")
             resolution = self.parse_resolution(resolution_str)
 
+            workflow = {}
+            if settings.is_comfyui_image_provider:
+                workflow_name = IMAGE_TYPE_WORKFLOW_MAP.get(
+                    image_type,
+                    IMAGE_TYPE_WORKFLOW_MAP["_default"],
+                )
+                try:
+                    workflow = self.load_workflow(workflow_name)
+                except WorkflowLoadError:
+                    logger.warning(
+                        "工作流 '%s' 不存在，使用默认工作流",
+                        workflow_name,
+                    )
+                    workflow_name = IMAGE_TYPE_WORKFLOW_MAP["_default"]
+                    workflow = self.load_workflow(workflow_name)
+
             # 生成
             output_path = await self.generate_single_image(
                 workflow=workflow,
@@ -737,6 +773,7 @@ class ImageGeneratorAgent:
                 resolution=resolution,
                 timeout=timeout,
                 reference_image_name=reference_image_name,
+                image_type=image_type,
             )
 
             # 后处理：根据图片类型优化输出
@@ -840,6 +877,13 @@ class ImageGeneratorAgent:
         Raises:
             GenerationError: 上传失败
         """
+        if settings.is_cloud_image_provider:
+            logger.info("云端图片 Provider 跳过 ComfyUI 参考图上传 | path=%s", image_path)
+            return image_path
+
+        if self.comfyui is None:
+            raise GenerationError("ComfyUI Provider 未初始化")
+
         src = Path(image_path)
         if not src.exists():
             raise GenerationError(f"商品原图不存在: {image_path}")
@@ -886,5 +930,8 @@ class ImageGeneratorAgent:
 
     async def close(self) -> None:
         """关闭资源"""
-        await self.comfyui.close()
+        if self.comfyui:
+            await self.comfyui.close()
+        if self.cloud_provider:
+            await self.cloud_provider.close()
         logger.info("ImageGeneratorAgent 已关闭")

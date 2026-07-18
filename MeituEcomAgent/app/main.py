@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI 主应用入口
 
 提供 REST API 端点:
@@ -46,6 +46,7 @@ from app.agents.orchestrator import AgentOrchestrator, PipelineStatus
 from app.agents.compliance_checker import ComplianceCheckerAgent, ComplianceCheckerError
 from app.services.rag_service import RAGService
 from app.services.comfyui_service import ComfyUIClient
+from app.services.image_provider import CloudImageProvider
 
 # 配置日志
 log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
@@ -281,16 +282,30 @@ async def health_check():
     """
     global _comfyui_client, _comfyui_available
 
-    # 检查 ComfyUI（使用缓存，避免每次请求都创建新客户端）
+    # 检查图片生成 Provider。云端模式不要求本地 ComfyUI 在线。
+    image_provider_status = "unknown"
     comfyui_status = "unknown"
-    if _comfyui_client is None:
-        _comfyui_client = ComfyUIClient()
-    if _comfyui_available is None:
+    if settings.is_cloud_image_provider:
+        cloud_provider = CloudImageProvider()
         try:
-            _comfyui_available = await _comfyui_client.check_connection()
-        except Exception:
-            _comfyui_available = False
-    comfyui_status = "connected" if _comfyui_available else "disconnected"
+            image_provider_status = "cloud:configured" if await cloud_provider.check_connection() else "cloud:missing_config"
+        finally:
+            await cloud_provider.close()
+        comfyui_status = "optional"
+    elif settings.is_comfyui_image_provider:
+        image_provider_status = "comfyui"
+        if _comfyui_client is None:
+            _comfyui_client = ComfyUIClient()
+        if _comfyui_available is None:
+            try:
+                _comfyui_available = await _comfyui_client.check_connection()
+            except Exception:
+                _comfyui_available = False
+        comfyui_status = "connected" if _comfyui_available else "disconnected"
+        if comfyui_status == "disconnected":
+            image_provider_status = "comfyui:disconnected"
+    else:
+        image_provider_status = f"unsupported:{settings.IMAGE_PROVIDER}"
 
     # 检查知识库
     kb_status = "unknown"
@@ -305,7 +320,9 @@ async def health_check():
     # 综合状态
     if "error" in kb_status:
         overall = "degraded"
-    elif comfyui_status == "disconnected":
+    elif image_provider_status.endswith("missing_config") or image_provider_status.startswith("unsupported"):
+        overall = "degraded"
+    elif settings.is_comfyui_image_provider and comfyui_status == "disconnected":
         overall = "degraded"
     elif kb_status == "not_built":
         overall = "degraded"
@@ -315,6 +332,7 @@ async def health_check():
     return HealthCheckResponse(
         status=overall,
         api="ok",
+        image_provider=image_provider_status,
         comfyui=comfyui_status,
         knowledge_base=kb_status,
         version=app.version,
@@ -758,28 +776,31 @@ async def pipeline_ecommerce_assets(
         len(image_bytes),
     )
 
-    # 3. 自动抠图 + 白底合成（异步执行，30s超时，失败则跳过）
+    # 3. 可选本地抠图 + 白底合成（生产默认关闭，避免依赖本地模型）
     white_bg_path = original_path  # 默认使用原图
     _PROCESSING_TIMEOUT = 30  # 抠图最长等待30秒
 
-    try:
-        logger.info("开始自动抠图 + 白底合成（超时=%ds）...", _PROCESSING_TIMEOUT)
-        white_bg_bytes = await asyncio.wait_for(
-            asyncio.to_thread(
-                ImagePreprocessor.make_white_background,
-                str(original_path),
-                (800, 800),
-            ),
-            timeout=_PROCESSING_TIMEOUT,
-        )
-        white_bg_filename = f"white_bg_{timestamp}.jpg"
-        white_bg_path = upload_dir / white_bg_filename
-        white_bg_path.write_bytes(white_bg_bytes)
-        logger.info("白底图已生成 | path=%s", white_bg_path)
-    except asyncio.TimeoutError:
-        logger.warning("自动抠图超时（%ds），将使用原图继续", _PROCESSING_TIMEOUT)
-    except Exception as e:
-        logger.warning("自动抠图/白底合成失败（将使用原图继续）: %s", str(e))
+    if settings.ENABLE_LOCAL_PREPROCESSING:
+        try:
+            logger.info("开始本地抠图 + 白底合成（超时=%ds）...", _PROCESSING_TIMEOUT)
+            white_bg_bytes = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ImagePreprocessor.make_white_background,
+                    str(original_path),
+                    (800, 800),
+                ),
+                timeout=_PROCESSING_TIMEOUT,
+            )
+            white_bg_filename = f"white_bg_{timestamp}.jpg"
+            white_bg_path = upload_dir / white_bg_filename
+            white_bg_path.write_bytes(white_bg_bytes)
+            logger.info("白底图已生成 | path=%s", white_bg_path)
+        except asyncio.TimeoutError:
+            logger.warning("本地抠图超时（%ds），将使用原图继续", _PROCESSING_TIMEOUT)
+        except Exception as e:
+            logger.warning("本地抠图/白底合成失败（将使用原图继续）: %s", str(e))
+    else:
+        logger.info("本地抠图预处理未启用，使用原图继续 | ENABLE_LOCAL_PREPROCESSING=false")
 
     # 4. 先同步创建任务（解决竞态条件：background_tasks 在响应返回后才执行）
     orchestrator = get_orchestrator()

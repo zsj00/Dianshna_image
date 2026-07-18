@@ -1,39 +1,61 @@
-"""
-配置管理模块 - 使用 python-dotenv 加载 .env 中的所有配置项
-"""
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# 加载 .env 文件
 load_dotenv()
 
 
 class Settings:
-    """应用配置类，以类属性方式暴露所有配置项"""
+    """应用配置类，所有环境变量统一从这里读取。"""
 
-    # OpenAI 相关配置
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-    # ComfyUI 服务地址
-    COMFYUI_SERVER_ADDRESS: str = os.getenv("COMFYUI_SERVER_ADDRESS", "host.docker.internal:8188")
-
-    # 模型配置
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")
     CHAT_MODEL: str = os.getenv("CHAT_MODEL", "qwen-plus")
     VISION_MODEL: str = os.getenv("VISION_MODEL", "qwen-vl-max")
     IMAGE_MODEL: str = os.getenv("IMAGE_MODEL", "dall-e-3")
 
-    # 路径配置
+    IMAGE_PROVIDER: str = os.getenv("IMAGE_PROVIDER", "cloud").strip().lower()
+    IMAGE_PROVIDER_TIMEOUT: int = int(os.getenv("IMAGE_PROVIDER_TIMEOUT", "300"))
+    CLOUD_IMAGE_SIZE: str = os.getenv("CLOUD_IMAGE_SIZE", "1024x1024")
+    CLOUD_IMAGE_RESPONSE_FORMAT: str = os.getenv("CLOUD_IMAGE_RESPONSE_FORMAT", "b64_json")
+
+    COMFYUI_SERVER_ADDRESS: str = os.getenv("COMFYUI_SERVER_ADDRESS", "host.docker.internal:8188")
+    COMFYUI_ENABLED: bool = os.getenv("COMFYUI_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    ENABLE_LOCAL_PREPROCESSING: bool = os.getenv(
+        "ENABLE_LOCAL_PREPROCESSING", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
     RAG_PERSIST_DIR: str = os.getenv("RAG_PERSIST_DIR", "./knowledge_base_index")
     OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "./output")
     KNOWLEDGE_BASE_DIR: str = os.getenv("KNOWLEDGE_BASE_DIR", "./knowledge_base")
     WORKFLOW_DIR: str = os.getenv("WORKFLOW_DIR", "./workflows")
 
-    # 日志配置
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE: str = os.getenv("LOG_FILE", "./logs/app.log")
 
+    @property
+    def is_cloud_image_provider(self) -> bool:
+        """判断当前是否使用云端图片生成。"""
+        return self.IMAGE_PROVIDER == "cloud"
 
-# 全局配置实例
+    @property
+    def is_comfyui_image_provider(self) -> bool:
+        """判断当前是否使用本地 ComfyUI。"""
+        return self.IMAGE_PROVIDER == "comfyui"
+
+    @staticmethod
+    def resolve_project_path(path_value: str) -> Path:
+        """将相对路径解析到项目根目录，绝对路径原样返回。"""
+        path = Path(path_value)
+        if path.is_absolute():
+            return path
+        base_dir = Path(__file__).resolve().parent.parent
+        return base_dir / path_value
+
+
 settings = Settings()

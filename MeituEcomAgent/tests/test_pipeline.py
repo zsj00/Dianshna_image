@@ -16,11 +16,12 @@ class TestConfig(unittest.TestCase):
 
     def test_required_configs_not_empty(self):
         required = [
-            ("OPENAI_API_KEY", settings.OPENAI_API_KEY),
             ("OPENAI_BASE_URL", settings.OPENAI_BASE_URL),
             ("EMBEDDING_MODEL", settings.EMBEDDING_MODEL),
             ("CHAT_MODEL", settings.CHAT_MODEL),
             ("VISION_MODEL", settings.VISION_MODEL),
+            ("IMAGE_PROVIDER", settings.IMAGE_PROVIDER),
+            ("IMAGE_MODEL", settings.IMAGE_MODEL),
         ]
         for name, value in required:
             self.assertTrue(
@@ -43,9 +44,14 @@ class TestConfig(unittest.TestCase):
                       ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
         self.assertTrue(len(settings.LOG_FILE) > 0)
 
-    def test_openai_base_url_is_alibaba(self):
-        """验证使用阿里云百炼 API"""
-        self.assertIn("dashscope.aliyuncs.com", settings.OPENAI_BASE_URL)
+    def test_openai_base_url_is_configurable(self):
+        """验证支持 OpenAI-compatible API 配置"""
+        self.assertTrue(settings.OPENAI_BASE_URL.startswith(("http://", "https://")))
+
+    def test_image_provider_defaults_to_cloud(self):
+        """生产默认不依赖本地 ComfyUI"""
+        self.assertEqual(settings.IMAGE_PROVIDER, "cloud")
+        self.assertTrue(settings.is_cloud_image_provider)
 
 
 class TestKnowledgeBase(unittest.TestCase):

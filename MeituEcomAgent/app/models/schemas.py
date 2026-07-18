@@ -222,6 +222,7 @@ class HealthCheckResponse(BaseModel):
 
     status: str = Field(..., description="整体状态")
     api: str = Field(default="ok", description="API服务状态")
+    image_provider: str = Field(default="unknown", description="图片生成Provider状态")
     comfyui: str = Field(default="unknown", description="ComfyUI连接状态")
     knowledge_base: str = Field(default="unknown", description="知识库状态")
     version: str = Field(default="0.3.0", description="版本号")

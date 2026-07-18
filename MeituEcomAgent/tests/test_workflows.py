@@ -31,7 +31,7 @@ class TestWorkflowFiles(unittest.TestCase):
     def test_valid_json(self):
         for wf_name in EXPECTED_WORKFLOWS:
             wf_path = WORKFLOW_DIR / wf_name
-            with open(wf_path, "r") as f:
+            with open(wf_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             self.assertIsInstance(data, dict, f"Not a dict: {wf_name}")
             self.assertIn("nodes", data, f"{wf_name}: missing 'nodes'")
@@ -40,7 +40,7 @@ class TestWorkflowFiles(unittest.TestCase):
     def test_required_nodes_present(self):
         for wf_name in EXPECTED_WORKFLOWS:
             wf_path = WORKFLOW_DIR / wf_name
-            with open(wf_path, "r") as f:
+            with open(wf_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
 
             class_types = [n["type"] for n in data.get("nodes", [])]
@@ -55,7 +55,7 @@ class TestWorkflowFiles(unittest.TestCase):
         """每个工作流必须至少有1个CLIPTextEncode节点"""
         for wf_name in EXPECTED_WORKFLOWS:
             wf_path = WORKFLOW_DIR / wf_name
-            with open(wf_path, "r") as f:
+            with open(wf_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
 
             clip_nodes = [
@@ -70,7 +70,7 @@ class TestWorkflowFiles(unittest.TestCase):
     def test_white_bg_has_correct_prefix(self):
         """白色背景工作流应有正确的输出前缀"""
         wf_path = WORKFLOW_DIR / "workflow_white_bg.json"
-        with open(wf_path, "r") as f:
+        with open(wf_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
 
         save_nodes = [
@@ -86,7 +86,7 @@ class TestWorkflowFiles(unittest.TestCase):
     def test_scene_workflow_prefix(self):
         """场景工作流应有scene前缀"""
         wf_path = WORKFLOW_DIR / "workflow_scene.json"
-        with open(wf_path, "r") as f:
+        with open(wf_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
 
         save_nodes = [
@@ -105,7 +105,7 @@ class TestWorkflowContent(unittest.TestCase):
         """生产环境工作流的默认prompt不应为空"""
         for wf_name in ["workflow_scene.json", "workflow_detail.json", "workflow_comparison.json"]:
             wf_path = WORKFLOW_DIR / wf_name
-            with open(wf_path, "r") as f:
+            with open(wf_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
 
             clip_nodes = [
@@ -125,7 +125,7 @@ class TestWorkflowContent(unittest.TestCase):
         models = set()
         for wf_name in EXPECTED_WORKFLOWS:
             wf_path = WORKFLOW_DIR / wf_name
-            with open(wf_path, "r") as f:
+            with open(wf_path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
 
             for node in data.get("nodes", []):
@@ -137,7 +137,7 @@ class TestWorkflowContent(unittest.TestCase):
     def test_scene_negative_prompt_is_negative(self):
         """场景工作流的负面prompt应包含负面关键词"""
         wf_path = WORKFLOW_DIR / "workflow_scene.json"
-        with open(wf_path, "r") as f:
+        with open(wf_path, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
 
         clip_nodes = [

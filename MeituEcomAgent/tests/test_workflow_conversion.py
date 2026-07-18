@@ -9,7 +9,7 @@ from app.agents.image_generator import ImageGeneratorAgent
 # 测试所有4个工作流
 for wf_name in ["workflow_white_bg.json", "workflow_scene.json", "workflow_detail.json", "workflow_comparison.json"]:
     print(f"=== {wf_name} ===")
-    with open(Path("workflows") / wf_name) as f:
+    with open(Path("workflows") / wf_name, encoding="utf-8-sig") as f:
         gui_wf = json.load(f)
 
     api_wf = ImageGeneratorAgent._convert_gui_to_api(gui_wf)

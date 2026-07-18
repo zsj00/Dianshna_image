@@ -284,6 +284,7 @@ textarea { min-height: 80px; }
   .header .logo { font-size: 1.6rem; }
 }
 </style>
+<link rel="stylesheet" href="/static/premium.css">
 </head>
 <body>
 
@@ -294,13 +295,14 @@ textarea { min-height: 80px; }
 <div class="app">
   <!-- Header -->
   <header class="header">
-    <div class="logo">电商智能生图</div>
-    <p class="subtitle">上传商品原图 → 选择平台 → AI 自动生成合规商品图 + 审核报告</p>
+    <div class="eyebrow">Dianshna Image · Cloud Agent Studio</div>
+    <div class="logo">电商智能生图工作台</div>
+    <p class="subtitle">上传商品原图，自动生成平台合规素材、视觉审核报告与可归档交付物。</p>
   </header>
 
   <!-- Step Indicator -->
   <div class="steps" id="stepIndicator">
-    <div class="step" data-step="upload"><span class="step-num">1<sup>step</sup></span> 上传图片</div>
+    <div class="step" data-step="upload"><span class="step-num">1</span> 上传图片</div>
     <div class="step" data-step="parse"><span class="step-num">2</span> 规则解析</div>
     <div class="step" data-step="generate"><span class="step-num">3</span> AI 生图</div>
     <div class="step" data-step="audit"><span class="step-num">4</span> 合规审核</div>
@@ -311,7 +313,7 @@ textarea { min-height: 80px; }
   <div class="card" id="configCard">
     <div class="card-header">
       <span class="icon">&#x1F4F7;</span>
-      <h2>上传商品原图 & 配置参数</h2>
+      <h2>创建电商素材任务</h2>
     </div>
 
     <!-- Upload Zone -->
@@ -320,7 +322,7 @@ textarea { min-height: 80px; }
         <div id="uploadPlaceholder">
           <div class="dz-icon">&#x1F5BC;</div>
           <div class="dz-text">点击或拖拽上传商品原图</div>
-          <div class="dz-hint">支持 JPG / PNG / WebP，建议 ≥ 800×800px</div>
+          <div class="dz-hint">支持 JPG / PNG / WebP，建议 ≥ 800×800px，白底或干净背景效果更佳</div>
         </div>
         <div id="uploadPreview" style="display:none">
           <img class="preview-img" id="previewImage" alt="预览">
@@ -372,7 +374,7 @@ textarea { min-height: 80px; }
 
     <!-- Submit Button -->
     <button class="btn btn-primary" id="submitBtn" onclick="submitPipeline()">
-      &#x1F680; 开始生成
+      &#x1F680; 生成高级商品素材
     </button>
   </div>
 
@@ -545,7 +547,7 @@ async function submitPipeline() {
   } catch (e) {
     showToast('提交失败: ' + e.message, 'error');
     document.getElementById('submitBtn').disabled = false;
-    document.getElementById('submitBtn').innerHTML = '&#x1F680; 开始生成';
+    document.getElementById('submitBtn').innerHTML = '&#x1F680; 生成高级商品素材';
   }
 }
 
@@ -609,7 +611,7 @@ async function pollTask() {
         `服务暂时响应慢，正在自动重试（第 ${pollFailCount} 次）...`;
     } else {
       document.getElementById('progressText').textContent =
-        `持续等待中（已重试 ${pollFailCount} 次）——请确保 ComfyUI 等服务已启动`;
+        `持续等待中（已重试 ${pollFailCount} 次）——请确认图片生成服务与 API 配置可用`;
     }
   }
 }
@@ -658,7 +660,7 @@ function showResults(data) {
   }
 
   // Stats
-  const stats = data.report?.compliance_stats || {};
+  const stats = data.compliance_stats || data.report?.compliance_stats || {};
   document.getElementById('summaryStats').innerHTML = `
     <div class="stat-card"><div class="stat-val">${stats.total || data.images?.length || 0}</div><div class="stat-label">生成图片</div></div>
     <div class="stat-card"><div class="stat-val" style="color:var(--success)">${stats.compliant ?? '-'}</div><div class="stat-label">合规通过</div></div>
@@ -714,7 +716,7 @@ function resetPipeline() {
   document.getElementById('resultsSection').classList.remove('visible');
   document.getElementById('progressBar').style.width = '0%';
   document.getElementById('submitBtn').disabled = false;
-  document.getElementById('submitBtn').innerHTML = '&#x1F680; 开始生成';
+  document.getElementById('submitBtn').innerHTML = '&#x1F680; 生成高级商品素材';
   resetUpload();
   document.getElementById('sellingPoints').value = '';
   charCount.textContent = '0';
