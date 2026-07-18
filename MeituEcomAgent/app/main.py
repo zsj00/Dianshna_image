@@ -41,6 +41,7 @@ from app.models.schemas import (
     ErrorResponse,
     PipelineFormRequest,
     PipelineResponse,
+    SellingPointSuggestionResponse,
 )
 from app.agents.orchestrator import AgentOrchestrator, PipelineStatus
 from app.agents.compliance_checker import ComplianceCheckerAgent, ComplianceCheckerError
@@ -703,6 +704,58 @@ async def root():
     """根路由 - 重定向到 Web UI"""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/ui")
+
+
+@app.post(
+    "/api/v1/selling-points/from-image",
+    response_model=SellingPointSuggestionResponse,
+    summary="根据商品图片自动生成卖点",
+    description="上传商品图片，调用视觉模型提取商品特征并生成可直接用于电商生图的卖点文案。",
+    tags=["管道"],
+)
+async def suggest_selling_points_from_image(
+    product_image: UploadFile = File(..., description="商品原图（支持 PNG/JPEG/WebP）"),
+    platform: str = Form("taobao", description="目标平台: amazon / taobao / aliexpress / shopee"),
+):
+    """根据商品图片自动生成卖点文案。"""
+    from pathlib import Path
+    from app.utils.file_utils import ensure_directory
+
+    valid_platforms = ["amazon", "aliexpress", "taobao", "shopee"]
+    platform_lower = platform.lower().strip()
+    if platform_lower not in valid_platforms:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的平台: '{platform}'。支持: {', '.join(valid_platforms)}",
+        )
+
+    image_bytes = await product_image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="商品图片不能为空")
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片文件过大，最大支持 20MB")
+
+    ext = Path(product_image.filename).suffix.lower() if product_image.filename else ".png"
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="仅支持 PNG/JPEG/WebP 图片")
+
+    base_dir = Path(__file__).resolve().parent.parent
+    upload_dir = base_dir / settings.OUTPUT_DIR / "uploads"
+    ensure_directory(str(upload_dir))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
+    image_path = upload_dir / f"selling_points_{timestamp}{ext}"
+    image_path.write_bytes(image_bytes)
+
+    try:
+        result = await get_orchestrator().rule_parser.suggest_selling_points_from_image(
+            image_path=str(image_path),
+            platform=platform_lower,
+        )
+    except Exception as exc:
+        logger.exception("自动生成卖点失败: %s", str(exc))
+        raise HTTPException(status_code=502, detail=f"自动生成卖点失败: {str(exc)}") from exc
+
+    return SellingPointSuggestionResponse(**result)
 
 
 # ---- 电商全管道端点（Form表单 + 文件上传） ----

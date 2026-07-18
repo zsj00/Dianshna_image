@@ -526,6 +526,65 @@ class RuleParserAgent:
 
     # ==================== Prompt 构造方法 ====================
 
+    async def suggest_selling_points_from_image(
+        self,
+        image_path: str,
+        platform: str = "taobao",
+    ) -> dict:
+        """根据商品图片自动生成电商卖点文案。"""
+        visual_analysis = await self._analyze_reference_image(
+            image_path=image_path,
+            product_desc="请识别商品品类、外观材质、容量规格、使用场景和可视化卖点。",
+        )
+        if not visual_analysis:
+            raise LLMCallError("无法从商品图片提取视觉信息，请检查图片或视觉模型配置")
+
+        system_prompt = """
+你是资深电商商品文案策划，擅长根据商品图片提炼真实、合规、可视觉化表达的卖点。
+必须只基于图片可见信息和常识化描述，不得编造医疗功效、绝对化承诺、虚假认证或无法从图片判断的参数。
+返回严格 JSON，不要 markdown。
+"""
+        user_prompt = f"""
+## 目标平台
+{platform}
+
+## 商品图片视觉分析
+{visual_analysis}
+
+## 输出要求
+1. 生成 4-6 个短卖点，每个卖点 4-12 个中文字符，适合用 “ | ” 拼接。
+2. 优先覆盖：品类/容量、材质质感、外观设计、使用场景、便携/送礼/高级感。
+3. 如果图片中没有明确文字或容量，不要编造具体容量；可写“便携小罐”“精致容量”等。
+4. 不要出现“第一、最、100%、永久、治疗、祛斑、药效”等高风险词。
+
+JSON 格式：
+{{
+  "product_summary": "一句话商品视觉摘要",
+  "points": ["卖点1", "卖点2", "卖点3", "卖点4"],
+  "selling_points": "卖点1 | 卖点2 | 卖点3 | 卖点4"
+}}
+"""
+        raw_response = await self._call_llm(system_prompt, user_prompt)
+        try:
+            result = json.loads(raw_response)
+        except json.JSONDecodeError:
+            raw_response = self._extract_json_from_text(raw_response)
+            result = json.loads(raw_response)
+
+        points = result.get("points", [])
+        if not isinstance(points, list):
+            points = []
+        safe_points = [str(point).strip() for point in points if str(point).strip()][:6]
+        selling_points = str(result.get("selling_points") or " | ".join(safe_points)).strip()
+        if not selling_points:
+            raise LLMCallError("卖点生成结果为空")
+
+        return {
+            "product_summary": str(result.get("product_summary", "")).strip(),
+            "points": safe_points,
+            "selling_points": selling_points,
+        }
+
     def _build_system_prompt(self) -> str:
         """构造系统提示词 - 全量生图场景"""
         return """你是一名 **资深电商视觉设计专家**，拥有10年以上跨境电商平台的图片设计经验。

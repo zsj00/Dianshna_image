@@ -323,3 +323,11 @@ class PipelineResponse(BaseModel):
     status: str = Field(default="pending", description="任务状态")
     message: str = Field(default="任务已提交", description="响应消息")
     product_image_saved: Optional[str] = Field(default=None, description="原图保存路径")
+
+
+class SellingPointSuggestionResponse(BaseModel):
+    """商品图片卖点生成响应"""
+
+    selling_points: str = Field(..., description="可直接用于生成任务的卖点文案")
+    points: List[str] = Field(default_factory=list, description="结构化卖点列表")
+    product_summary: str = Field(default="", description="商品视觉摘要")

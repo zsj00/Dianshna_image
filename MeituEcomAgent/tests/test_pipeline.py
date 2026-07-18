@@ -272,6 +272,37 @@ class TestPromptQualityGuards(unittest.TestCase):
         self.assertIn("细腻膏体", positive)
         self.assertIn("different product", negative)
 
+    async def _fake_visual_analysis(self, image_path, product_desc):
+        return "半透明磨砂面霜罐，黑色亮面盖，淡粉色膏体，适合护肤品场景"
+
+    async def _fake_selling_points_llm(self, system_prompt, user_prompt):
+        return json.dumps(
+            {
+                "product_summary": "一款精致护肤面霜罐",
+                "points": ["精致小罐", "黑色亮盖", "细腻膏体", "护肤场景"],
+                "selling_points": "精致小罐 | 黑色亮盖 | 细腻膏体 | 护肤场景",
+            },
+            ensure_ascii=False,
+        )
+
+    def test_rule_parser_suggests_selling_points_from_image(self):
+        import asyncio
+        from app.agents.rule_parser import RuleParserAgent
+
+        parser = RuleParserAgent.__new__(RuleParserAgent)
+        parser._analyze_reference_image = self._fake_visual_analysis
+        parser._call_llm = self._fake_selling_points_llm
+
+        result = asyncio.run(
+            parser.suggest_selling_points_from_image(
+                image_path="fake.png",
+                platform="taobao",
+            )
+        )
+
+        self.assertIn("精致小罐", result["selling_points"])
+        self.assertEqual(len(result["points"]), 4)
+
 
 if __name__ == "__main__":
     unittest.main()
