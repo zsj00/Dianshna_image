@@ -171,10 +171,7 @@ class DashScopeImageProvider:
         payload = {
             "model": settings.DASHSCOPE_IMAGE_MODEL,
             "input": input_data,
-            "parameters": {
-                "size": settings.DASHSCOPE_IMAGE_SIZE,
-                "n": 1,
-            },
+            "parameters": self._build_parameters(),
         }
         response_data = await self._request_json(
             "POST",
@@ -233,13 +230,26 @@ class DashScopeImageProvider:
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """复用注入客户端或创建临时客户端发送请求。"""
-        if self.client is not None:
-            response = await self.client.request(method, url, **kwargs)
-        else:
-            async with httpx.AsyncClient(timeout=settings.IMAGE_PROVIDER_TIMEOUT) as client:
-                response = await client.request(method, url, **kwargs)
-        response.raise_for_status()
-        return response
+        try:
+            if self.client is not None:
+                response = await self.client.request(method, url, **kwargs)
+            else:
+                async with httpx.AsyncClient(timeout=settings.IMAGE_PROVIDER_TIMEOUT) as client:
+                    response = await client.request(method, url, **kwargs)
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            response_text = exc.response.text[:500] if exc.response is not None else ""
+            logger.error(
+                "百炼图片接口 HTTP 错误 | method=%s | status=%s | body=%s",
+                method,
+                exc.response.status_code if exc.response is not None else "unknown",
+                response_text,
+            )
+            raise ImageProviderError(f"百炼图片接口 HTTP 错误: {response_text or str(exc)}") from exc
+        except httpx.HTTPError as exc:
+            logger.error("百炼图片接口连接异常 | method=%s | error=%s", method, str(exc))
+            raise ImageProviderError(f"百炼图片接口连接异常: {str(exc)}") from exc
 
     async def _sleep(self) -> None:
         """等待下一轮任务轮询。"""
@@ -249,10 +259,25 @@ class DashScopeImageProvider:
 
     def _build_prompt(self, request: ImageGenerationRequest) -> str:
         """构造适合百炼文生图的 prompt。"""
-        prompt_parts = [request.positive_prompt.strip()]
+        prompt_parts = [
+            request.positive_prompt.strip(),
+            (
+                "高端电商商品摄影，主体清晰锐利，真实材质纹理，柔和棚拍布光，"
+                "干净构图，平台合规，无文字水印，无多余品牌标识，适合商品详情页交付。"
+            ),
+        ]
         if request.reference_image:
             prompt_parts.append("参考原商品图的主体特征，保持商品品类和核心卖点一致。")
         return "\n\n".join(part for part in prompt_parts if part)
+
+    def _build_parameters(self) -> dict:
+        """构造百炼图片质量参数。"""
+        return {
+            "size": settings.DASHSCOPE_IMAGE_SIZE,
+            "n": 1,
+            "prompt_extend": settings.DASHSCOPE_IMAGE_PROMPT_EXTEND,
+            "watermark": settings.DASHSCOPE_IMAGE_WATERMARK,
+        }
 
     def _extract_image_url(self, output: dict) -> str:
         """兼容百炼不同模型的图片 URL 字段。"""

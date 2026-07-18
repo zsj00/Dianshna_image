@@ -68,7 +68,9 @@ IMAGE_PROVIDER=dashscope
 DASHSCOPE_API_KEY=sk-your-dashscope-key
 DASHSCOPE_API_BASE=https://dashscope.aliyuncs.com/api/v1
 DASHSCOPE_IMAGE_MODEL=wanx2.1-t2i-turbo
-DASHSCOPE_IMAGE_SIZE=1024*1024
+DASHSCOPE_IMAGE_SIZE=1280*1280
+DASHSCOPE_IMAGE_PROMPT_EXTEND=true
+DASHSCOPE_IMAGE_WATERMARK=false
 ```
 
 ## Docker 部署
@@ -106,6 +108,9 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | `IMAGE_PROVIDER` | `dashscope` | `dashscope`、`cloud` 或 `comfyui` |
 | `DASHSCOPE_API_KEY` | 空 | 百炼通义万相图片生成 Key |
 | `DASHSCOPE_IMAGE_MODEL` | `wanx2.1-t2i-turbo` | 百炼图片模型 |
+| `DASHSCOPE_IMAGE_SIZE` | `1280*1280` | 百炼图片尺寸，提高清晰度 |
+| `DASHSCOPE_IMAGE_PROMPT_EXTEND` | `true` | 启用百炼 prompt 智能扩写 |
+| `DASHSCOPE_IMAGE_WATERMARK` | `false` | 关闭图片水印 |
 | `IMAGE_MODEL` | `dall-e-3` | `cloud` provider 使用的图片模型 |
 | `ENABLE_LOCAL_PREPROCESSING` | `false` | 是否启用 rembg 本地抠图 |
 | `OUTPUT_DIR` | `./output` | 输出归档目录 |

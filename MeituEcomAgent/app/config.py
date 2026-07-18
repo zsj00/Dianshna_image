@@ -1,9 +1,15 @@
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
-load_dotenv()
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = PROJECT_DIR / ".env"
+load_dotenv(ENV_FILE, override=False)
+for env_key, env_value in dotenv_values(ENV_FILE).items():
+    env_key = env_key.lstrip("\ufeff")
+    if env_value and not os.getenv(env_key):
+        os.environ[env_key] = env_value
 
 
 class Settings:
@@ -25,8 +31,14 @@ class Settings:
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", OPENAI_API_KEY)
     DASHSCOPE_API_BASE: str = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/api/v1")
     DASHSCOPE_IMAGE_MODEL: str = os.getenv("DASHSCOPE_IMAGE_MODEL", "wanx2.1-t2i-turbo")
-    DASHSCOPE_IMAGE_SIZE: str = os.getenv("DASHSCOPE_IMAGE_SIZE", "1024*1024")
+    DASHSCOPE_IMAGE_SIZE: str = os.getenv("DASHSCOPE_IMAGE_SIZE", "1280*1280")
     DASHSCOPE_IMAGE_POLL_INTERVAL: float = float(os.getenv("DASHSCOPE_IMAGE_POLL_INTERVAL", "2"))
+    DASHSCOPE_IMAGE_PROMPT_EXTEND: bool = os.getenv(
+        "DASHSCOPE_IMAGE_PROMPT_EXTEND", "true"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    DASHSCOPE_IMAGE_WATERMARK: bool = os.getenv(
+        "DASHSCOPE_IMAGE_WATERMARK", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     COMFYUI_SERVER_ADDRESS: str = os.getenv("COMFYUI_SERVER_ADDRESS", "host.docker.internal:8188")
     COMFYUI_ENABLED: bool = os.getenv("COMFYUI_ENABLED", "false").strip().lower() in {
@@ -65,8 +77,7 @@ class Settings:
         path = Path(path_value)
         if path.is_absolute():
             return path
-        base_dir = Path(__file__).resolve().parent.parent
-        return base_dir / path_value
+        return PROJECT_DIR / path_value
 
 
 settings = Settings()

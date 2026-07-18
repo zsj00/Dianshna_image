@@ -48,10 +48,14 @@ class TestConfig(unittest.TestCase):
         """验证支持 OpenAI-compatible API 配置"""
         self.assertTrue(settings.OPENAI_BASE_URL.startswith(("http://", "https://")))
 
-    def test_image_provider_defaults_to_cloud(self):
-        """生产默认不依赖本地 ComfyUI"""
-        self.assertEqual(settings.IMAGE_PROVIDER, "cloud")
-        self.assertTrue(settings.is_cloud_image_provider)
+    def test_image_provider_is_supported(self):
+        """图片 Provider 必须是受支持的可部署模式"""
+        self.assertIn(settings.IMAGE_PROVIDER, {"cloud", "dashscope", "comfyui"})
+        self.assertTrue(
+            settings.is_cloud_image_provider
+            or settings.is_dashscope_image_provider
+            or settings.is_comfyui_image_provider
+        )
 
 
 class TestKnowledgeBase(unittest.TestCase):

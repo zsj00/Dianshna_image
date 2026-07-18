@@ -116,6 +116,8 @@ class TestDashScopeImageProvider(unittest.IsolatedAsyncioTestCase):
             settings.OUTPUT_DIR = tmpdir
             settings.DASHSCOPE_API_KEY = "test-key"
             settings.DASHSCOPE_IMAGE_POLL_INTERVAL = 0
+            settings.DASHSCOPE_IMAGE_PROMPT_EXTEND = True
+            settings.DASHSCOPE_IMAGE_WATERMARK = False
             fake_client = FakeDashScopeClient()
             provider = DashScopeImageProvider(client=fake_client)
 
@@ -130,6 +132,9 @@ class TestDashScopeImageProvider(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(Path(output_path).exists())
             self.assertEqual(Path(output_path).read_bytes(), b"fake-dashscope-png")
             self.assertTrue(any(headers[2].get("headers", {}).get("X-DashScope-Async") == "enable" for headers in fake_client.requests))
+            create_request = fake_client.requests[0][2]["json"]
+            self.assertTrue(create_request["parameters"]["prompt_extend"])
+            self.assertFalse(create_request["parameters"]["watermark"])
             await provider.close()
             self.assertTrue(fake_client.closed)
 

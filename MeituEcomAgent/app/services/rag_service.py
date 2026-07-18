@@ -97,6 +97,7 @@ class RAGService:
         """创建 ServiceContext"""
         embed_model = self._create_embedding_model()
         return ServiceContext.from_defaults(
+            llm=None,
             embed_model=embed_model,
             chunk_size=1024,
             chunk_overlap=200,
