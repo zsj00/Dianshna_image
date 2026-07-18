@@ -39,6 +39,15 @@ class Settings:
     DASHSCOPE_IMAGE_WATERMARK: bool = os.getenv(
         "DASHSCOPE_IMAGE_WATERMARK", "false"
     ).strip().lower() in {"1", "true", "yes", "on"}
+    DASHSCOPE_IMAGE_SEED: int = int(os.getenv("DASHSCOPE_IMAGE_SEED", "20260718"))
+    ONLINE_REFERENCE_STYLE: str = os.getenv(
+        "ONLINE_REFERENCE_STYLE",
+        (
+            "premium online skincare and cosmetic cream jar product photography, "
+            "clean Tmall/Amazon/Sephora style listing images, white hero shot, "
+            "soft lifestyle shelf scene, macro material detail, clear size comparison infographic"
+        ),
+    )
 
     COMFYUI_SERVER_ADDRESS: str = os.getenv("COMFYUI_SERVER_ADDRESS", "host.docker.internal:8188")
     COMFYUI_ENABLED: bool = os.getenv("COMFYUI_ENABLED", "false").strip().lower() in {

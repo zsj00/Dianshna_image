@@ -225,5 +225,53 @@ class TestPipelineDataFlow(unittest.TestCase):
         self.assertEqual(parsed["status"], "completed")
 
 
+class TestPromptQualityGuards(unittest.TestCase):
+    """Prompt 一致性与卖点兜底测试"""
+
+    def test_rule_parser_stabilizes_product_identity(self):
+        from app.agents.rule_parser import RuleParserAgent
+
+        parser = RuleParserAgent.__new__(RuleParserAgent)
+        image_set = {
+            "white_bg_main": {
+                "prompt_en": "premium cosmetic jar on white background",
+                "negative_prompt": "watermark",
+            },
+            "scene_lifestyle": {
+                "prompt_en": "cosmetic jar on bathroom shelf",
+                "negative_prompt": "",
+            },
+        }
+
+        identity = parser._build_product_identity(
+            product_desc="粉色面霜罐，黑色亮面盖",
+            visual_analysis="半透明磨砂罐身，淡粉色膏体，黑色圆盖",
+            selling_points="20ml黄金容量 | 便携 | 滋润",
+        )
+        parser._stabilize_image_prompts(image_set, identity, "20ml黄金容量 | 便携 | 滋润")
+
+        for prompt_data in image_set.values():
+            self.assertIn("CONSISTENCY LOCK", prompt_data["prompt_en"])
+            self.assertIn("same exact SKU", prompt_data["prompt_en"])
+            self.assertIn("20ml黄金容量", prompt_data["prompt_en"])
+            self.assertIn("different product", prompt_data["negative_prompt"])
+
+    def test_image_generator_enhances_prompt_before_provider(self):
+        from app.agents.image_generator import ImageGeneratorAgent
+
+        positive, negative = ImageGeneratorAgent._enhance_prompt_for_consistency(
+            positive_prompt="cosmetic cream jar product photo",
+            negative_prompt="watermark",
+            image_type="detail_closeup",
+            selling_points="细腻膏体 | 便携容量",
+            reference_image_name="product.webp",
+        )
+
+        self.assertIn("same cream jar silhouette", positive)
+        self.assertIn("Online reference benchmark", positive)
+        self.assertIn("细腻膏体", positive)
+        self.assertIn("different product", negative)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,8 @@ DASHSCOPE_IMAGE_MODEL=wanx2.1-t2i-turbo
 DASHSCOPE_IMAGE_SIZE=1280*1280
 DASHSCOPE_IMAGE_PROMPT_EXTEND=true
 DASHSCOPE_IMAGE_WATERMARK=false
+DASHSCOPE_IMAGE_SEED=20260718
+ONLINE_REFERENCE_STYLE=premium online skincare and cosmetic cream jar product photography, clean Tmall/Amazon/Sephora style listing images
 ```
 
 ## Docker 部署
@@ -111,6 +113,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | `DASHSCOPE_IMAGE_SIZE` | `1280*1280` | 百炼图片尺寸，提高清晰度 |
 | `DASHSCOPE_IMAGE_PROMPT_EXTEND` | `true` | 启用百炼 prompt 智能扩写 |
 | `DASHSCOPE_IMAGE_WATERMARK` | `false` | 关闭图片水印 |
+| `DASHSCOPE_IMAGE_SEED` | `20260718` | 固定 seed，提升同批图风格稳定性 |
+| `ONLINE_REFERENCE_STYLE` | 护肤品高级电商图 | 用网上同类商品图的视觉风格作为 prompt 参考 |
 | `IMAGE_MODEL` | `dall-e-3` | `cloud` provider 使用的图片模型 |
 | `ENABLE_LOCAL_PREPROCESSING` | `false` | 是否启用 rembg 本地抠图 |
 | `OUTPUT_DIR` | `./output` | 输出归档目录 |

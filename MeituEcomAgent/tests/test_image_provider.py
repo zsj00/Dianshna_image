@@ -135,6 +135,7 @@ class TestDashScopeImageProvider(unittest.IsolatedAsyncioTestCase):
             create_request = fake_client.requests[0][2]["json"]
             self.assertTrue(create_request["parameters"]["prompt_extend"])
             self.assertFalse(create_request["parameters"]["watermark"])
+            self.assertEqual(create_request["parameters"]["seed"], settings.DASHSCOPE_IMAGE_SEED)
             await provider.close()
             self.assertTrue(fake_client.closed)
 

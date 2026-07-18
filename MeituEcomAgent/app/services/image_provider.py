@@ -275,6 +275,7 @@ class DashScopeImageProvider:
         return {
             "size": settings.DASHSCOPE_IMAGE_SIZE,
             "n": 1,
+            "seed": settings.DASHSCOPE_IMAGE_SEED,
             "prompt_extend": settings.DASHSCOPE_IMAGE_PROMPT_EXTEND,
             "watermark": settings.DASHSCOPE_IMAGE_WATERMARK,
         }

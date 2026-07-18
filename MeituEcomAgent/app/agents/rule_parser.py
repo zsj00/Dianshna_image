@@ -275,6 +275,16 @@ class RuleParserAgent:
                         "image_set[%s] 为纯字符串，已自动包装为标准 dict 格式",
                         img_type,
                     )
+            product_identity = self._build_product_identity(
+                product_desc=product_desc,
+                visual_analysis=visual_analysis,
+                selling_points=selling_points,
+            )
+            self._stabilize_image_prompts(
+                image_set=image_set,
+                product_identity=product_identity,
+                selling_points=selling_points,
+            )
 
         logger.info(
             "解析完成 | platform=%s | image_types=%s | checklist_items=%d",
@@ -283,6 +293,53 @@ class RuleParserAgent:
             len(result.get("compliance_checklist", [])),
         )
         return result
+
+    def _build_product_identity(
+        self,
+        product_desc: str,
+        visual_analysis: str = "",
+        selling_points: Optional[str] = None,
+    ) -> str:
+        """构造跨图片共用的商品身份锚点。"""
+        identity_parts = [
+            f"source product identity: {product_desc.strip()}",
+            "same exact SKU in every image, identical jar shape, identical lid, identical cream color, identical label placement, identical product scale",
+        ]
+        if visual_analysis:
+            identity_parts.append(f"visual identity from uploaded reference image: {visual_analysis.strip()}")
+        if selling_points:
+            identity_parts.append(f"core selling points to express visually: {selling_points.strip()}")
+        identity_parts.append(f"online reference style benchmark: {settings.ONLINE_REFERENCE_STYLE}")
+        return "; ".join(part for part in identity_parts if part)
+
+    def _stabilize_image_prompts(
+        self,
+        image_set: dict,
+        product_identity: str,
+        selling_points: Optional[str] = None,
+    ) -> None:
+        """统一增强四张图的商品一致性和卖点表达。"""
+        common_negative = (
+            "different product, changed container shape, changed lid shape, changed color, "
+            "wrong label, random brand, unreadable fake text, extra products, watermark, logo mismatch, "
+            "deformed object, low quality, blurry, overexposed, cluttered background"
+        )
+        for image_type, prompt_data in image_set.items():
+            if not isinstance(prompt_data, dict):
+                continue
+            prompt = prompt_data.get("prompt_en", "")
+            selling_point_text = f"visualize selling points: {selling_points}. " if selling_points else ""
+            prompt_data["prompt_en"] = (
+                f"{prompt}\n\n"
+                f"CONSISTENCY LOCK: {product_identity}. "
+                "The product must remain the same object across the full image set; only camera angle, crop, and background may change. "
+                f"{selling_point_text}"
+                f"Image role: {image_type}."
+            ).strip()
+            negative = prompt_data.get("negative_prompt", "")
+            prompt_data["negative_prompt"] = ", ".join(
+                part for part in [negative, common_negative] if part
+            )
 
     async def generate_single_prompt(
         self,

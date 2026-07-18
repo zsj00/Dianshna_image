@@ -750,6 +750,13 @@ class ImageGeneratorAgent:
                 positive = prompt_data.get("prompt_en", "")
                 negative = prompt_data.get("negative_prompt", "")
                 resolution_str = prompt_data.get("resolution", "1024x1024")
+            positive, negative = self._enhance_prompt_for_consistency(
+                positive_prompt=positive,
+                negative_prompt=negative,
+                image_type=image_type,
+                selling_points=selling_points,
+                reference_image_name=reference_image_name,
+            )
             resolution = self.parse_resolution(resolution_str)
 
             workflow = {}
@@ -796,6 +803,42 @@ class ImageGeneratorAgent:
                 error=str(e),
             )
             raise
+
+    @staticmethod
+    def _enhance_prompt_for_consistency(
+        positive_prompt: str,
+        negative_prompt: str,
+        image_type: str,
+        selling_points: str = "",
+        reference_image_name: str = "",
+    ) -> Tuple[str, str]:
+        """在发给图片 Provider 前统一增强商品一致性和卖点表达。"""
+        positive_parts = [
+            positive_prompt.strip(),
+            (
+                "Keep the exact same product SKU as the uploaded reference: same cream jar silhouette, "
+                "same black glossy lid, same translucent frosted container, same cream texture and color, "
+                "same label position and product proportions. Do not invent a different object."
+            ),
+            f"Online reference benchmark: {settings.ONLINE_REFERENCE_STYLE}.",
+            f"Image type requirement: {image_type}.",
+        ]
+        if selling_points:
+            positive_parts.append(f"Clearly express these selling points visually: {selling_points}.")
+        if reference_image_name:
+            positive_parts.append("Use the uploaded product image as the identity reference when supported.")
+
+        negative_parts = [
+            negative_prompt.strip(),
+            (
+                "different product, different jar, different lid, wrong container color, changed label, "
+                "extra random items replacing product, unreadable fake brand text, watermark, low resolution, blurry"
+            ),
+        ]
+        return (
+            "\n\n".join(part for part in positive_parts if part),
+            ", ".join(part for part in negative_parts if part),
+        )
 
     # ==================== 后处理 ====================
 
