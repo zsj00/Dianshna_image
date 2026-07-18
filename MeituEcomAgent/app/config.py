@@ -22,6 +22,12 @@ class Settings:
     CLOUD_IMAGE_SIZE: str = os.getenv("CLOUD_IMAGE_SIZE", "1024x1024")
     CLOUD_IMAGE_RESPONSE_FORMAT: str = os.getenv("CLOUD_IMAGE_RESPONSE_FORMAT", "b64_json")
 
+    DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", OPENAI_API_KEY)
+    DASHSCOPE_API_BASE: str = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/api/v1")
+    DASHSCOPE_IMAGE_MODEL: str = os.getenv("DASHSCOPE_IMAGE_MODEL", "wanx2.1-t2i-turbo")
+    DASHSCOPE_IMAGE_SIZE: str = os.getenv("DASHSCOPE_IMAGE_SIZE", "1024*1024")
+    DASHSCOPE_IMAGE_POLL_INTERVAL: float = float(os.getenv("DASHSCOPE_IMAGE_POLL_INTERVAL", "2"))
+
     COMFYUI_SERVER_ADDRESS: str = os.getenv("COMFYUI_SERVER_ADDRESS", "host.docker.internal:8188")
     COMFYUI_ENABLED: bool = os.getenv("COMFYUI_ENABLED", "false").strip().lower() in {
         "1", "true", "yes", "on",
@@ -42,6 +48,11 @@ class Settings:
     def is_cloud_image_provider(self) -> bool:
         """判断当前是否使用云端图片生成。"""
         return self.IMAGE_PROVIDER == "cloud"
+
+    @property
+    def is_dashscope_image_provider(self) -> bool:
+        """判断当前是否使用阿里云百炼图片生成。"""
+        return self.IMAGE_PROVIDER == "dashscope"
 
     @property
     def is_comfyui_image_provider(self) -> bool:

@@ -24,6 +24,19 @@ class TestProviderSelection(unittest.TestCase):
         settings.IMAGE_PROVIDER = original_provider
         settings.OPENAI_API_KEY = original_api_key
 
+    def test_dashscope_provider_does_not_initialize_comfyui(self):
+        original_provider = settings.IMAGE_PROVIDER
+        original_api_key = settings.DASHSCOPE_API_KEY
+        settings.IMAGE_PROVIDER = "dashscope"
+        settings.DASHSCOPE_API_KEY = "test-key"
+        agent = ImageGeneratorAgent()
+
+        self.assertIsNone(agent.comfyui)
+        self.assertIsNotNone(agent.cloud_provider)
+        asyncio.run(agent.close())
+        settings.IMAGE_PROVIDER = original_provider
+        settings.DASHSCOPE_API_KEY = original_api_key
+
 
 if __name__ == "__main__":
     unittest.main()

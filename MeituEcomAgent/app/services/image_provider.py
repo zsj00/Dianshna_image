@@ -8,7 +8,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import httpx
 from openai import AsyncOpenAI
@@ -131,3 +131,159 @@ class CloudImageProvider:
         filepath.write_bytes(image_bytes)
         logger.info("云端图片已保存 | path=%s | size=%d", filepath, len(image_bytes))
         return str(filepath)
+
+
+class DashScopeImageProvider:
+    """阿里云百炼通义万相图片生成 Provider。"""
+
+    def __init__(self, client: Optional[httpx.AsyncClient] = None) -> None:
+        self.client = client
+        self.output_dir = settings.resolve_project_path(settings.OUTPUT_DIR)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    async def check_connection(self) -> bool:
+        """百炼健康检查不发起付费请求，仅验证关键配置。"""
+        return bool(
+            settings.DASHSCOPE_API_KEY
+            and settings.DASHSCOPE_API_BASE
+            and settings.DASHSCOPE_IMAGE_MODEL
+        )
+
+    async def generate_image(self, request: ImageGenerationRequest) -> str:
+        """创建百炼异步生图任务，轮询完成后下载临时图片 URL。"""
+        task_id = await self._create_task(request)
+        image_url = await self._wait_for_task(task_id)
+        image_bytes = await self._download_image(image_url)
+        return self._save_image(image_bytes, request.image_type)
+
+    async def close(self) -> None:
+        """关闭注入的 HTTP 客户端。"""
+        if self.client is not None:
+            await self.client.aclose()
+
+    async def _create_task(self, request: ImageGenerationRequest) -> str:
+        """调用百炼创建异步文生图任务。"""
+        input_data = {
+            "prompt": self._build_prompt(request),
+        }
+        if request.negative_prompt:
+            input_data["negative_prompt"] = request.negative_prompt.strip()
+        payload = {
+            "model": settings.DASHSCOPE_IMAGE_MODEL,
+            "input": input_data,
+            "parameters": {
+                "size": settings.DASHSCOPE_IMAGE_SIZE,
+                "n": 1,
+            },
+        }
+        response_data = await self._request_json(
+            "POST",
+            f"{self._api_base}/services/aigc/text2image/image-synthesis",
+            json=payload,
+            headers={
+                **self._auth_headers,
+                "Content-Type": "application/json",
+                "X-DashScope-Async": "enable",
+            },
+        )
+        task_id = response_data.get("output", {}).get("task_id")
+        if not task_id:
+            raise ImageProviderError("百炼图片任务创建失败：响应缺少 task_id")
+        logger.info(
+            "百炼图片任务已创建 | task_id=%s | model=%s | size=%s",
+            task_id,
+            settings.DASHSCOPE_IMAGE_MODEL,
+            settings.DASHSCOPE_IMAGE_SIZE,
+        )
+        return str(task_id)
+
+    async def _wait_for_task(self, task_id: str) -> str:
+        """轮询百炼任务直到成功或失败。"""
+        deadline = datetime.now().timestamp() + settings.IMAGE_PROVIDER_TIMEOUT
+        while datetime.now().timestamp() < deadline:
+            response_data = await self._request_json(
+                "GET",
+                f"{self._api_base}/tasks/{task_id}",
+                headers=self._auth_headers,
+            )
+            output = response_data.get("output", {})
+            task_status = output.get("task_status", "")
+            if task_status == "SUCCEEDED":
+                image_url = self._extract_image_url(output)
+                logger.info("百炼图片任务已完成 | task_id=%s", task_id)
+                return image_url
+            if task_status in {"FAILED", "CANCELED", "UNKNOWN"}:
+                message = output.get("message") or response_data.get("message") or task_status
+                raise ImageProviderError(f"百炼图片任务失败: {message}")
+            await self._sleep()
+        raise ImageProviderError(f"百炼图片任务超时: task_id={task_id}")
+
+    async def _download_image(self, image_url: str) -> bytes:
+        """下载百炼返回的临时图片 URL。"""
+        response = await self._request("GET", image_url, headers={})
+        return response.content
+
+    async def _request_json(self, method: str, url: str, **kwargs: Any) -> dict:
+        """发送 HTTP 请求并解析 JSON 响应。"""
+        response = await self._request(method, url, **kwargs)
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ImageProviderError("百炼接口返回非 JSON 对象")
+        return data
+
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """复用注入客户端或创建临时客户端发送请求。"""
+        if self.client is not None:
+            response = await self.client.request(method, url, **kwargs)
+        else:
+            async with httpx.AsyncClient(timeout=settings.IMAGE_PROVIDER_TIMEOUT) as client:
+                response = await client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response
+
+    async def _sleep(self) -> None:
+        """等待下一轮任务轮询。"""
+        import asyncio
+
+        await asyncio.sleep(settings.DASHSCOPE_IMAGE_POLL_INTERVAL)
+
+    def _build_prompt(self, request: ImageGenerationRequest) -> str:
+        """构造适合百炼文生图的 prompt。"""
+        prompt_parts = [request.positive_prompt.strip()]
+        if request.reference_image:
+            prompt_parts.append("参考原商品图的主体特征，保持商品品类和核心卖点一致。")
+        return "\n\n".join(part for part in prompt_parts if part)
+
+    def _extract_image_url(self, output: dict) -> str:
+        """兼容百炼不同模型的图片 URL 字段。"""
+        results = output.get("results")
+        if isinstance(results, list) and results:
+            first_result = results[0]
+            if isinstance(first_result, dict) and first_result.get("url"):
+                return str(first_result["url"])
+        if output.get("result_url"):
+            return str(output["result_url"])
+        if output.get("url"):
+            return str(output["url"])
+        raise ImageProviderError("百炼图片任务成功但响应缺少图片 URL")
+
+    def _save_image(self, image_bytes: bytes, image_type: str) -> str:
+        """保存百炼生成图片到输出目录。"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
+        filename = f"{image_type}_dashscope_{timestamp}.png"
+        filepath = self.output_dir / filename
+        filepath.write_bytes(image_bytes)
+        logger.info("百炼图片已保存 | path=%s | size=%d", filepath, len(image_bytes))
+        return str(filepath)
+
+    @property
+    def _api_base(self) -> str:
+        """返回百炼 API 根地址。"""
+        return settings.DASHSCOPE_API_BASE.rstrip("/")
+
+    @property
+    def _auth_headers(self) -> dict:
+        """返回百炼鉴权请求头。"""
+        return {
+            "Authorization": f"Bearer {settings.DASHSCOPE_API_KEY}",
+        }

@@ -23,6 +23,7 @@ from app.config import settings
 from app.services.comfyui_service import ComfyUIClient, ComfyUIError
 from app.services.image_provider import (
     CloudImageProvider,
+    DashScopeImageProvider,
     ImageGenerationRequest,
     ImageProviderError,
 )
@@ -87,11 +88,13 @@ class ImageGeneratorAgent:
         """
         self.provider_name = settings.IMAGE_PROVIDER
         self.comfyui: Optional[ComfyUIClient] = None
-        self.cloud_provider: Optional[CloudImageProvider] = None
+        self.cloud_provider: Optional[CloudImageProvider | DashScopeImageProvider] = None
         if settings.is_comfyui_image_provider:
             self.comfyui = ComfyUIClient(server_address=server_address)
         elif settings.is_cloud_image_provider:
             self.cloud_provider = CloudImageProvider()
+        elif settings.is_dashscope_image_provider:
+            self.cloud_provider = DashScopeImageProvider()
         else:
             raise ImageGeneratorError(f"不支持的图片生成 Provider: {settings.IMAGE_PROVIDER}")
 
@@ -494,7 +497,7 @@ class ImageGeneratorAgent:
         """
         width, height = resolution
 
-        if settings.is_cloud_image_provider:
+        if settings.is_cloud_image_provider or settings.is_dashscope_image_provider:
             if self.cloud_provider is None:
                 raise GenerationError("云端图片 Provider 未初始化")
             try:
@@ -627,7 +630,7 @@ class ImageGeneratorAgent:
                     f"ComfyUI 服务不可用: {self.comfyui.server_address}"
                 )
         elif self.cloud_provider is None or not await self.cloud_provider.check_connection():
-            raise GenerationError("云端图片 Provider 配置不可用，请检查 OPENAI_API_KEY/OPENAI_BASE_URL/IMAGE_MODEL")
+            raise GenerationError("云端图片 Provider 配置不可用，请检查 OPENAI_API_KEY/DASHSCOPE_API_KEY/图片模型配置")
 
         image_types = list(prompts.keys())
         logger.info(
@@ -877,7 +880,7 @@ class ImageGeneratorAgent:
         Raises:
             GenerationError: 上传失败
         """
-        if settings.is_cloud_image_provider:
+        if settings.is_cloud_image_provider or settings.is_dashscope_image_provider:
             logger.info("云端图片 Provider 跳过 ComfyUI 参考图上传 | path=%s", image_path)
             return image_path
 

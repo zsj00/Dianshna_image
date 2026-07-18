@@ -46,7 +46,7 @@ from app.agents.orchestrator import AgentOrchestrator, PipelineStatus
 from app.agents.compliance_checker import ComplianceCheckerAgent, ComplianceCheckerError
 from app.services.rag_service import RAGService
 from app.services.comfyui_service import ComfyUIClient
-from app.services.image_provider import CloudImageProvider
+from app.services.image_provider import CloudImageProvider, DashScopeImageProvider
 
 # 配置日志
 log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
@@ -291,6 +291,13 @@ async def health_check():
             image_provider_status = "cloud:configured" if await cloud_provider.check_connection() else "cloud:missing_config"
         finally:
             await cloud_provider.close()
+        comfyui_status = "optional"
+    elif settings.is_dashscope_image_provider:
+        dashscope_provider = DashScopeImageProvider()
+        try:
+            image_provider_status = "dashscope:configured" if await dashscope_provider.check_connection() else "dashscope:missing_config"
+        finally:
+            await dashscope_provider.close()
         comfyui_status = "optional"
     elif settings.is_comfyui_image_provider:
         image_provider_status = "comfyui"
