@@ -27,6 +27,11 @@ from app.services.image_provider import (
     ImageGenerationRequest,
     ImageProviderError,
 )
+from app.utils.product_cards import (
+    create_detail_from_reference,
+    create_dimension_sheet_from_reference,
+    create_white_main_from_reference,
+)
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -750,6 +755,26 @@ class ImageGeneratorAgent:
                 positive = prompt_data.get("prompt_en", "")
                 negative = prompt_data.get("negative_prompt", "")
                 resolution_str = prompt_data.get("resolution", "1024x1024")
+
+            reference_locked_path = self._generate_reference_locked_asset(
+                image_type=image_type,
+                reference_image_name=reference_image_name,
+                selling_points=selling_points,
+            )
+            if reference_locked_path:
+                self._update_task(
+                    task_id,
+                    status=TaskStatus.COMPLETED,
+                    output_paths=[reference_locked_path],
+                )
+                return reference_locked_path
+
+            if self._should_generate_scene_background(image_type, white_bg_path):
+                positive, negative = self._build_scene_background_prompt(
+                    positive_prompt=positive,
+                    negative_prompt=negative,
+                    selling_points=selling_points,
+                )
             positive, negative = self._enhance_prompt_for_consistency(
                 positive_prompt=positive,
                 negative_prompt=negative,
@@ -803,6 +828,64 @@ class ImageGeneratorAgent:
                 error=str(e),
             )
             raise
+
+    @staticmethod
+    def _is_cloud_like_provider() -> bool:
+        """判断当前是否为云端生图 Provider。"""
+        return settings.is_cloud_image_provider or settings.is_dashscope_image_provider
+
+    @classmethod
+    def _generate_reference_locked_asset(
+        cls,
+        image_type: str,
+        reference_image_name: str = "",
+        selling_points: str = "",
+    ) -> str:
+        """对强一致性图片直接基于上传原图生成，避免云端文生图改造商品。"""
+        if not cls._is_cloud_like_provider() or not reference_image_name:
+            return ""
+
+        if image_type == "white_bg_main":
+            output_path = create_white_main_from_reference(reference_image_name)
+        elif image_type == "detail_closeup":
+            output_path = create_detail_from_reference(reference_image_name)
+        elif image_type == "scale_comparison":
+            output_path = create_dimension_sheet_from_reference(reference_image_name, selling_points)
+        else:
+            return ""
+
+        logger.info("原图锁定素材生成完成 | type=%s | path=%s", image_type, output_path)
+        return output_path
+
+    @classmethod
+    def _should_generate_scene_background(cls, image_type: str, white_bg_path: str = "") -> bool:
+        """场景图在云端模式下先生成空背景，再用原商品融合。"""
+        return cls._is_cloud_like_provider() and image_type == "scene_lifestyle" and bool(white_bg_path)
+
+    @staticmethod
+    def _build_scene_background_prompt(
+        positive_prompt: str,
+        negative_prompt: str,
+        selling_points: str = "",
+    ) -> Tuple[str, str]:
+        """生成空场景背景 Prompt，避免模型再画一个错误商品。"""
+        positive_parts = [
+            positive_prompt.strip(),
+            "Create only a premium ecommerce lifestyle background, no product object in the scene.",
+            "Leave a clean central tabletop or shelf area for later product compositing.",
+            "Use soft natural light, realistic commercial photography, clean premium white style.",
+        ]
+        if selling_points:
+            positive_parts.append(f"Scene mood should support these selling points: {selling_points}.")
+
+        negative_parts = [
+            negative_prompt.strip(),
+            "product, jar, bottle, tube, pump, cosmetic container, package, label, logo, text, watermark",
+        ]
+        return (
+            "\n\n".join(part for part in positive_parts if part),
+            ", ".join(part for part in negative_parts if part),
+        )
 
     @staticmethod
     def _enhance_prompt_for_consistency(
@@ -862,11 +945,6 @@ class ImageGeneratorAgent:
             if image_type == "white_bg_main":
                 image_path = ensure_white_background(image_path)
                 logger.info("后处理[white_bg]: 白底填充完成")
-                # 叠加商品卖点文案
-                if selling_points:
-                    from app.utils.image_utils import overlay_selling_points
-                    image_path = overlay_selling_points(image_path, selling_points)
-                    logger.info("后处理[white_bg]: 商品文案叠加完成")
             elif image_type == "detail_closeup":
                 image_path = crop_center(image_path, crop_ratio=0.4)
                 logger.info("后处理[detail]: 中心裁剪完成（40%区域）")
