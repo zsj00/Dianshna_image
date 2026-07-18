@@ -3,6 +3,8 @@ Pipeline 数据流 & 配置单元测试
 """
 import unittest
 import json
+import inspect
+import tempfile
 from pathlib import Path
 
 from app.config import settings
@@ -38,6 +40,15 @@ class TestConfig(unittest.TestCase):
         ]
         for name, value in path_configs:
             self.assertTrue(value, f"{name} must not be empty")
+
+    def test_resolve_project_path_preserves_absolute_path(self):
+        """绝对输出目录不能被解析到 app 子目录。"""
+        with tempfile.TemporaryDirectory() as tempdir:
+            absolute_path = Path(tempdir).resolve()
+            self.assertEqual(
+                settings.resolve_project_path(str(absolute_path)),
+                absolute_path,
+            )
 
     def test_log_config(self):
         self.assertIn(settings.LOG_LEVEL.upper(),
@@ -142,6 +153,22 @@ class TestPipelineDataFlow(unittest.TestCase):
         for img_type, prompt_data in sample_image_set.items():
             missing = required_fields - set(prompt_data.keys())
             self.assertFalse(missing, f"{img_type} missing: {missing}")
+
+    def test_retry_pipeline_accepts_selling_points(self):
+        """合规重试必须接收卖点，不能依赖未定义的任务局部变量。"""
+        from app.agents.orchestrator import AgentOrchestrator
+
+        parameters = inspect.signature(AgentOrchestrator._audit_and_retry).parameters
+        self.assertIn("selling_points", parameters)
+
+    def test_pipeline_does_not_require_actual_dimensions(self):
+        """无标注比例图不能要求用户填写尺寸。"""
+        from app.main import pipeline_ecommerce_assets
+
+        parameters = inspect.signature(pipeline_ecommerce_assets).parameters
+        self.assertNotIn("product_height_mm", parameters)
+        self.assertNotIn("product_width_mm", parameters)
+        self.assertNotIn("product_depth_mm", parameters)
 
     def test_audit_result_structure(self):
         """验证 check_image_set() 返回结构正确"""

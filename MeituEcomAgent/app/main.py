@@ -671,7 +671,7 @@ static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # 挂载 output 目录（生成图片浏览）
-output_dir_static = Path(__file__).resolve().parent.parent / settings.OUTPUT_DIR.lstrip("./")
+output_dir_static = settings.resolve_project_path(settings.OUTPUT_DIR)
 output_dir_static.mkdir(parents=True, exist_ok=True)
 app.mount("/output", StaticFiles(directory=str(output_dir_static)), name="output")
 
@@ -810,6 +810,8 @@ async def pipeline_ecommerce_assets(
             detail=f"不支持的平台: '{platform}'。支持: {', '.join(valid_platforms)}",
         )
 
+    combined_selling_points = selling_points.strip()
+
     # 2. 保存上传的商品原图
     base_dir = Path(__file__).resolve().parent.parent
     upload_dir = base_dir / settings.OUTPUT_DIR / "uploads"
@@ -869,7 +871,7 @@ async def pipeline_ecommerce_assets(
     orchestrator._init_task(
         task_id=task_id,
         platform=platform_lower,
-        product_desc=selling_points,
+        product_desc=combined_selling_points,
     )
 
     # 5. 提交后台任务
@@ -878,13 +880,13 @@ async def pipeline_ecommerce_assets(
             logger.info(
                 "电商管道后台任务开始 | platform=%s | selling_points=%s",
                 platform_lower,
-                selling_points[:50],
+                combined_selling_points[:50],
             )
             await orchestrator.run_pipeline(
                 platform=platform_lower,
-                product_desc=selling_points,
+                product_desc=combined_selling_points,
                 reference_image=str(white_bg_path),
-                selling_points=selling_points,
+                selling_points=combined_selling_points,
                 max_retries=max_retries,
                 task_id=task_id,
             )

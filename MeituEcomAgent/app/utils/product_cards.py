@@ -1,6 +1,7 @@
 """基于上传原图生成确定性交付图，避免云端模型重画商品。"""
 import logging
 import re
+from collections import deque
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -20,7 +21,7 @@ def create_white_main_from_reference(image_path: str, output_path: Optional[str]
     path = _ensure_image_exists(image_path)
 
     with Image.open(path) as img:
-        product = _trim_transparent_border(img.convert("RGBA"))
+        product = _prepare_reference_product(img)
         product = _resize_to_fit(product, 1030, 1030)
         canvas = Image.new("RGBA", (1200, 1200), (255, 255, 255, 255))
         pos = ((1200 - product.width) // 2, (1200 - product.height) // 2)
@@ -36,7 +37,7 @@ def create_detail_from_reference(image_path: str, output_path: Optional[str] = N
     path = _ensure_image_exists(image_path)
 
     with Image.open(path) as img:
-        source = _trim_transparent_border(img.convert("RGBA"))
+        source = _prepare_reference_product(img)
         width, height = source.size
         crop_width = max(1, int(width * 0.64))
         crop_height = max(1, int(height * 0.64))
@@ -62,7 +63,7 @@ def create_dimension_sheet_from_reference(
     path = _ensure_image_exists(image_path)
 
     with Image.open(path) as img:
-        product = _trim_transparent_border(img.convert("RGBA"))
+        product = _prepare_reference_product(img)
         product = _resize_to_fit(product, 560, 760)
         canvas = Image.new("RGBA", (1200, 1200), (255, 255, 255, 255))
         draw = ImageDraw.Draw(canvas)
@@ -74,7 +75,7 @@ def create_dimension_sheet_from_reference(
         soft = (246, 242, 236, 255)
 
         draw.text((76, 58), "Product Dimensions", fill=line_color, font=title_font)
-        draw.text((78, 112), "Same uploaded product. Measurements are visual references.", fill=muted, font=small_font)
+        draw.text((78, 112), "Same uploaded product. Measurements supplied by seller (mm).", fill=muted, font=small_font)
         draw.line((76, 158, 1124, 158), fill=(232, 235, 239, 255), width=2)
 
         product_x = 250 + (420 - product.width) // 2
@@ -110,11 +111,68 @@ def create_dimension_sheet_from_reference(
             _draw_size_item(draw, panel_x + 36, panel_y + 428, "Capacity", dimensions["volume"], value_font, small_font)
 
         draw.rounded_rectangle((76, 1040, 1124, 1110), radius=18, fill=(250, 250, 250, 255), outline=(235, 238, 242, 255), width=1)
-        draw.text((104, 1062), "Tip: add exact values like H 12cm / W 4cm / D 4cm / 30ml in selling points.", fill=muted, font=small_font)
+        draw.text((104, 1062), "Values shown are the seller-provided actual measurements.", fill=muted, font=small_font)
 
         output = Path(output_path) if output_path else path.parent / (path.stem + "_dimension_sheet.jpg")
         canvas.convert("RGB").save(output, "JPEG", quality=96)
         logger.info("基于原图生成电商尺寸图 | %s -> %s", path.name, output.name)
+        return str(output)
+
+
+def create_scale_comparison_from_reference(
+    image_path: str,
+    selling_points: str = "",
+    output_path: Optional[str] = None,
+) -> str:
+    """生成无文字、无尺寸线的比例参照图。"""
+    path = _ensure_image_exists(image_path)
+
+    with Image.open(path) as img:
+        product = _prepare_reference_product(img)
+        product = _resize_to_fit(product, 620, 760)
+        dimensions = _estimate_dimensions(product.width, product.height, selling_points)
+        canvas = Image.new("RGBA", (1200, 1200), (248, 247, 244, 255))
+
+        product_x = 300 + (560 - product.width) // 2
+        product_y = 220 + (760 - product.height) // 2
+        _paste_with_soft_shadow(canvas, product, product_x, product_y)
+
+        width_mm = _dimension_value_as_mm(dimensions.get("width", ""))
+        coin_diameter = max(52, min(260, round(product.width * 24.26 / max(width_mm, 1))))
+        coin_x, coin_y = 875, 820
+        draw = ImageDraw.Draw(canvas)
+        card_width = 260
+        card_height = 164
+        card_x, card_y = 820, 570
+        draw.rounded_rectangle(
+            (card_x, card_y, card_x + card_width, card_y + card_height),
+            radius=18,
+            fill=(235, 238, 240, 255),
+            outline=(183, 189, 194, 255),
+            width=4,
+        )
+        draw.rounded_rectangle(
+            (card_x + 26, card_y + 32, card_x + 90, card_y + 72),
+            radius=8,
+            fill=(202, 208, 212, 255),
+        )
+        draw.line((card_x + 28, card_y + 112, card_x + 200, card_y + 112), fill=(193, 199, 204, 255), width=8)
+        draw.ellipse(
+            (coin_x, coin_y, coin_x + coin_diameter, coin_y + coin_diameter),
+            fill=(190, 194, 198, 255),
+            outline=(128, 134, 140, 255),
+            width=8,
+        )
+        inset = max(10, coin_diameter // 10)
+        draw.ellipse(
+            (coin_x + inset, coin_y + inset, coin_x + coin_diameter - inset, coin_y + coin_diameter - inset),
+            outline=(225, 227, 230, 255),
+            width=4,
+        )
+
+        output = Path(output_path) if output_path else path.parent / (path.stem + "_scale_comparison.jpg")
+        canvas.convert("RGB").save(output, "JPEG", quality=96)
+        logger.info("基于原图生成无标注比例参照图 | %s -> %s", path.name, output.name)
         return str(output)
 
 
@@ -135,11 +193,137 @@ def _trim_transparent_border(image: Image.Image) -> Image.Image:
     return image
 
 
+def prepare_product_cutout(image: Image.Image) -> Image.Image:
+    """保留透明原图；对烘焙棋盘格背景的图片自动去除边缘中性色背景。"""
+    product = image.convert("RGBA")
+    max_edge = max(product.size)
+    if max_edge > 960:
+        scale = 960 / max_edge
+        product = product.resize(
+            (max(1, round(product.width * scale)), max(1, round(product.height * scale))),
+            Image.LANCZOS,
+        )
+        logger.info("原图已缩放后进行前景分离 | max_edge=%d -> 960", max_edge)
+
+    alpha = product.getchannel("A")
+    if alpha.getextrema()[0] < 250:
+        return _trim_transparent_border(product)
+
+    if not _has_light_neutral_corners(product):
+        foreground = _extract_foreground_with_grabcut(product)
+        if foreground is not None:
+            return foreground
+
+    width, height = product.size
+    pixels = product.load()
+    queue = deque()
+    visited = set()
+
+    for x in range(width):
+        queue.append((x, 0))
+        queue.append((x, height - 1))
+    for y in range(1, height - 1):
+        queue.append((0, y))
+        queue.append((width - 1, y))
+
+    while queue:
+        x, y = queue.popleft()
+        if (x, y) in visited:
+            continue
+        visited.add((x, y))
+        red, green, blue, alpha_value = pixels[x, y]
+        if alpha_value == 0 or min(red, green, blue) < 220 or max(red, green, blue) - min(red, green, blue) > 12:
+            continue
+        pixels[x, y] = (red, green, blue, 0)
+        for next_x, next_y in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= next_x < width and 0 <= next_y < height and (next_x, next_y) not in visited:
+                queue.append((next_x, next_y))
+
+    return _trim_transparent_border(product)
+
+
+def _has_light_neutral_corners(image: Image.Image) -> bool:
+    """判断是否为白底/浅色中性背景，避免对其执行高成本 GrabCut。"""
+    width, height = image.size
+    points = ((0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1))
+    for x, y in points:
+        red, green, blue, _ = image.getpixel((x, y))
+        if min(red, green, blue) < 220 or max(red, green, blue) - min(red, green, blue) > 12:
+            return False
+    return True
+
+
+def _extract_foreground_with_grabcut(image: Image.Image) -> Optional[Image.Image]:
+    """使用传统 GrabCut 从带背景原图中提取中心商品，不依赖本地模型。"""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        logger.warning("OpenCV 未安装，跳过 GrabCut 前景分离")
+        return None
+
+    width, height = image.size
+    if width < 32 or height < 32:
+        return None
+
+    rgb_image = image.convert("RGB")
+    source = cv2.cvtColor(np.array(rgb_image), cv2.COLOR_RGB2BGR)
+    mask = np.zeros((height, width), np.uint8)
+    margin_x = max(2, int(width * 0.06))
+    margin_y = max(2, int(height * 0.06))
+    rectangle = (margin_x, margin_y, width - margin_x * 2, height - margin_y * 2)
+    background_model = np.zeros((1, 65), np.float64)
+    foreground_model = np.zeros((1, 65), np.float64)
+
+    cv2.grabCut(
+        source,
+        mask,
+        rectangle,
+        background_model,
+        foreground_model,
+        1,
+        cv2.GC_INIT_WITH_RECT,
+    )
+    foreground_mask = np.where(
+        (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD), 255, 0
+    ).astype("uint8")
+    foreground_ratio = float(np.count_nonzero(foreground_mask)) / float(width * height)
+    coordinates = cv2.findNonZero(foreground_mask)
+    if coordinates is None or not 0.02 <= foreground_ratio <= 0.78:
+        return None
+
+    _, _, box_width, box_height = cv2.boundingRect(coordinates)
+    if box_width >= width * 0.97 and box_height >= height * 0.97:
+        return None
+
+    foreground_mask = cv2.GaussianBlur(foreground_mask, (0, 0), 0.8)
+    result = image.convert("RGBA")
+    result.putalpha(Image.fromarray(foreground_mask))
+    logger.info(
+        "GrabCut 前景分离完成 | size=%dx%d | ratio=%.2f | bbox=%dx%d",
+        width,
+        height,
+        foreground_ratio,
+        box_width,
+        box_height,
+    )
+    return _trim_transparent_border(result)
+
+
+def _prepare_reference_product(image: Image.Image) -> Image.Image:
+    """兼容旧调用，返回适合合成的商品透明前景。"""
+    return prepare_product_cutout(image)
+
+
 def _resize_to_fit(image: Image.Image, max_width: int, max_height: int) -> Image.Image:
     """等比缩放图片到目标框内。"""
-    result = image.copy()
-    result.thumbnail((max_width, max_height), Image.LANCZOS)
-    return result
+    width, height = image.size
+    scale = min(max_width / max(width, 1), max_height / max(height, 1))
+    target_size = (
+        max(1, round(width * scale)),
+        max(1, round(height * scale)),
+    )
+    return image.resize(target_size, Image.LANCZOS)
 
 
 def _paste_with_soft_shadow(canvas: Image.Image, product: Image.Image, x: int, y: int) -> None:
@@ -155,13 +339,22 @@ def _estimate_dimensions(width_px: int, height_px: int, selling_points: str) -> 
     """从卖点中提取尺寸；缺失时给出视觉参考值。"""
     extracted = _extract_dimensions(selling_points)
     aspect = height_px / max(width_px, 1)
-    height = extracted.get("height") or ("12.0 cm" if aspect > 1.8 else "8.0 cm")
-    width = extracted.get("width") or f"{max(2.8, min(9.8, float(height.split()[0]) / aspect)):.1f} cm"
-    depth = extracted.get("depth") or width
+    height = extracted.get("height") or "Not provided"
+    width = extracted.get("width") or "Not provided"
+    depth = extracted.get("depth") or "Not provided"
     dimensions = {"height": height, "width": width, "depth": depth}
     if extracted.get("volume"):
         dimensions["volume"] = extracted["volume"]
     return dimensions
+
+
+def _dimension_value_as_mm(value: str) -> float:
+    """将已解析尺寸转换为毫米，用于比例参照物缩放。"""
+    match = re.match(r"(\d+(?:\.\d+)?)\s*(mm|cm)", value or "", re.IGNORECASE)
+    if not match:
+        return 50.0
+    number = float(match.group(1))
+    return number * 10 if match.group(2).lower() == "cm" else number
 
 
 def _extract_dimensions(text: str) -> Dict[str, str]:

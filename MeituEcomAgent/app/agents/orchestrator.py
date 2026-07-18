@@ -193,6 +193,7 @@ class AgentOrchestrator:
                     prompts=image_set,
                     reference_image_name=reference_image_name,
                     selling_points=selling_points,
+                    concurrent=False,
                 )
             except ImageGeneratorError as e:
                 self._fail_task(task_id, f"生图失败: {str(e)}")
@@ -225,6 +226,7 @@ class AgentOrchestrator:
                 max_retries=max_retries,
                 pipeline_log=pipeline_log,
                 reference_image_name=reference_image_name,
+                selling_points=selling_points,
             )
 
             # =================================================================
@@ -311,6 +313,7 @@ class AgentOrchestrator:
         max_retries: int,
         pipeline_log: List[str],
         reference_image_name: str = "",
+        selling_points: str = "",
     ) -> tuple:
         """
         审核图片并在不合规时自动重试
@@ -381,6 +384,15 @@ class AgentOrchestrator:
                 if not violations:
                     continue
 
+                if img_type in {"white_bg_main", "detail_closeup", "scale_comparison"}:
+                    message = (
+                        f"  ! {IMAGE_TYPE_LABELS.get(img_type, img_type)} 为原图锁定素材，"
+                        "跳过无效重绘，请根据审核报告调整原图后重新提交"
+                    )
+                    logger.info(message)
+                    pipeline_log.append(message)
+                    continue
+
                 # 获取原始 prompt
                 original = image_set.get(img_type, {})
                 original_prompt = original.get("prompt_en", "")
@@ -413,18 +425,14 @@ class AgentOrchestrator:
 
                     # b) 用修复后的 prompt 重绘
                     try:
-                        new_path = await self.image_generator.generate_single_image(
-                            workflow=self.image_generator.load_workflow(
-                                IMAGE_TYPE_WORKFLOW_MAP.get(
-                                    img_type, IMAGE_TYPE_WORKFLOW_MAP["_default"]
-                                )
-                            ),
-                            positive_prompt=fixed_prompt,
-                            negative_prompt=original.get("negative_prompt", ""),
-                            resolution=self.image_generator.parse_resolution(
-                                original.get("resolution", "1024x1024")
-                            ),
+                        retry_prompt = dict(original)
+                        retry_prompt["prompt_en"] = fixed_prompt
+                        new_path = await self.image_generator.regenerate_for_retry(
+                            task_id=task_id,
+                            image_type=img_type,
+                            prompt_data=retry_prompt,
                             reference_image_name=reference_image_name,
+                            selling_points=selling_points,
                         )
                     except ImageGeneratorError as e:
                         logger.error("重绘失败: %s", str(e))
@@ -432,9 +440,6 @@ class AgentOrchestrator:
                         break
 
                     # 后处理：根据图片类型优化
-                    new_path = self.image_generator._post_process(
-                        new_path, img_type
-                    )
                     pipeline_log.append(f"    ✓ 新图: {Path(new_path).name}")
 
                     # c) 重新审核

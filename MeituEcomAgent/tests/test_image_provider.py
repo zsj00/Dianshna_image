@@ -6,12 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 from app.config import settings
 from app.services.image_provider import (
     CloudImageProvider,
     DashScopeImageProvider,
     ImageGenerationRequest,
+    ImageProviderError,
 )
 
 
@@ -142,6 +144,20 @@ class TestDashScopeImageProvider(unittest.IsolatedAsyncioTestCase):
         settings.OUTPUT_DIR = original_output_dir
         settings.DASHSCOPE_API_KEY = original_api_key
         settings.DASHSCOPE_IMAGE_POLL_INTERVAL = original_poll_interval
+
+    async def test_timeout_creates_one_replacement_task(self):
+        provider = DashScopeImageProvider(client=FakeDashScopeClient())
+        provider._create_task = AsyncMock(side_effect=["timed-out", "replacement"])
+        provider._wait_for_task = AsyncMock(
+            side_effect=[ImageProviderError("百炼图片任务超时: task_id=timed-out"), "https://example.test/image.png"]
+        )
+        provider._download_image = AsyncMock(return_value=b"replacement-png")
+        provider._save_image = Mock(return_value="replacement.png")
+
+        result = await provider.generate_image(ImageGenerationRequest(positive_prompt="test"))
+
+        self.assertEqual(result, "replacement.png")
+        self.assertEqual(provider._create_task.await_count, 2)
 
 
 if __name__ == "__main__":

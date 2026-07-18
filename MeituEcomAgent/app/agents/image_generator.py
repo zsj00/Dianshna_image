@@ -30,6 +30,7 @@ from app.services.image_provider import (
 from app.utils.product_cards import (
     create_detail_from_reference,
     create_dimension_sheet_from_reference,
+    create_scale_comparison_from_reference,
     create_white_main_from_reference,
 )
 
@@ -756,10 +757,11 @@ class ImageGeneratorAgent:
                 negative = prompt_data.get("negative_prompt", "")
                 resolution_str = prompt_data.get("resolution", "1024x1024")
 
-            reference_locked_path = self._generate_reference_locked_asset(
-                image_type=image_type,
-                reference_image_name=reference_image_name,
-                selling_points=selling_points,
+            reference_locked_path = await asyncio.to_thread(
+                self._generate_reference_locked_asset,
+                image_type,
+                reference_image_name,
+                selling_points,
             )
             if reference_locked_path:
                 self._update_task(
@@ -831,6 +833,44 @@ class ImageGeneratorAgent:
             )
             raise
 
+    async def regenerate_for_retry(
+        self,
+        task_id: str,
+        image_type: str,
+        prompt_data: dict,
+        reference_image_name: str = "",
+        selling_points: str = "",
+        timeout: int = 300,
+    ) -> str:
+        """使用与首次生成相同的路径重试，避免合规重试重绘已锁定的商品。"""
+        reference_locked_path = await asyncio.to_thread(
+            self._generate_reference_locked_asset,
+            image_type,
+            reference_image_name,
+            selling_points,
+        )
+        if reference_locked_path:
+            return reference_locked_path
+
+        white_bg_path = ""
+        if image_type == "scene_lifestyle" and reference_image_name:
+            white_bg_path = await asyncio.to_thread(
+                self._generate_reference_locked_asset,
+                "white_bg_main",
+                reference_image_name,
+                selling_points,
+            )
+
+        return await self._generate_one_with_tracking(
+            task_id=task_id,
+            image_type=image_type,
+            prompt_data=prompt_data,
+            timeout=timeout,
+            reference_image_name=reference_image_name,
+            selling_points=selling_points,
+            white_bg_path=white_bg_path,
+        )
+
     @staticmethod
     def _is_cloud_like_provider() -> bool:
         """判断当前是否为云端生图 Provider。"""
@@ -852,7 +892,7 @@ class ImageGeneratorAgent:
         elif image_type == "detail_closeup":
             output_path = create_detail_from_reference(reference_image_name)
         elif image_type == "scale_comparison":
-            output_path = create_dimension_sheet_from_reference(reference_image_name, selling_points)
+            output_path = create_scale_comparison_from_reference(reference_image_name, selling_points)
         else:
             return ""
 
@@ -874,15 +914,16 @@ class ImageGeneratorAgent:
         positive_parts = [
             positive_prompt.strip(),
             "Create only a premium ecommerce lifestyle background, no product object in the scene.",
-            "Leave a clean central tabletop or shelf area for later product compositing.",
-            "Use soft natural light, realistic commercial photography, clean premium white style.",
+            "Leave a clean central tabletop or shelf area for later product compositing, with an unobstructed horizontal surface.",
+            "Use perspective-compatible eye-level commercial photography, soft natural window light, and a believable product placement zone in the lower middle of the frame.",
+            "Keep props subtle and pushed to the edges; do not block the placement zone.",
         ]
         if selling_points:
             positive_parts.append(f"Scene mood should support these selling points: {selling_points}.")
 
         negative_parts = [
             negative_prompt.strip(),
-            "product, jar, bottle, tube, pump, cosmetic container, package, label, logo, text, watermark",
+            "product, jar, bottle, tube, pump, cosmetic container, package, label, logo, text, watermark, duplicate product, floating object, obstructed tabletop, crowded center",
         ]
         return (
             "\n\n".join(part for part in positive_parts if part),
@@ -934,13 +975,12 @@ class ImageGeneratorAgent:
         
         - white_bg_main: 确保纯白背景（消除PNG透明度）
         - detail_closeup: 中心裁剪（突出细节），保留原始背景
-        - scale_comparison: 添加专业尺寸标注线（长宽高cm）
+        - scale_comparison: 保留无文字、无标注线的比例参照构图
         - scene_lifestyle: 保留原始场景背景，不做白底处理
         """
         from app.utils.image_utils import (
             ensure_white_background,
             crop_center,
-            add_size_label,
         )
         
         try:
@@ -951,8 +991,7 @@ class ImageGeneratorAgent:
                 image_path = crop_center(image_path, crop_ratio=0.4)
                 logger.info("后处理[detail]: 中心裁剪完成（40%区域）")
             elif image_type == "scale_comparison":
-                image_path = add_size_label(image_path)
-                logger.info("后处理[comparison]: 专业尺寸标注完成")
+                logger.info("后处理[comparison]: 保留无标注比例参照图")
             elif image_type == "scene_lifestyle":
                 logger.info("后处理[scene]: 执行产品+场景合成")
                 if white_bg_path:

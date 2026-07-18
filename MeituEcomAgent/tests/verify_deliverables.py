@@ -3,10 +3,14 @@ v0.3 交付物完整性验证 + 端到端测试脚本
 """
 import json
 import shutil
+import tempfile
 from pathlib import Path
+
+from PIL import Image
 
 from app.agents.image_generator import IMAGE_TYPE_WORKFLOW_MAP
 from app.utils.file_utils import create_output_directory, generate_report
+from app.utils.product_cards import create_scale_comparison_from_reference
 
 
 def test_all_deliverables():
@@ -24,7 +28,7 @@ def test_all_deliverables():
     wf_path = Path("workflows") / wf_name
     assert wf_path.exists(), "工作流文件不存在"
 
-    with open(wf_path) as f:
+    with open(wf_path, encoding="utf-8") as f:
         wf = json.load(f)
     clip_nodes = [n for n in wf["nodes"] if n["type"] == "CLIPTextEncode"]
     save_node = [n for n in wf["nodes"] if "SaveImage" in n["type"]][0]
@@ -41,7 +45,7 @@ def test_all_deliverables():
     print("4.2 场景营销图生成")
     print("-" * 40)
     wf_path = Path("workflows") / IMAGE_TYPE_WORKFLOW_MAP["scene_lifestyle"]
-    with open(wf_path) as f:
+    with open(wf_path, encoding="utf-8") as f:
         wf = json.load(f)
     clip_nodes = [n for n in wf["nodes"] if n["type"] == "CLIPTextEncode"]
     clip_nodes.sort(key=lambda n: n["id"])
@@ -59,7 +63,7 @@ def test_all_deliverables():
     print("4.3 细节特写图生成")
     print("-" * 40)
     wf_path = Path("workflows") / IMAGE_TYPE_WORKFLOW_MAP["detail_closeup"]
-    with open(wf_path) as f:
+    with open(wf_path, encoding="utf-8") as f:
         wf = json.load(f)
     ksampler = [n for n in wf["nodes"] if n["type"] == "KSampler"][0]
     steps = ksampler["widgets_values"][2]
@@ -72,15 +76,21 @@ def test_all_deliverables():
     # ----------------------------------------------------------
     print("4.4 尺寸对比图生成")
     print("-" * 40)
-    wf_path = Path("workflows") / IMAGE_TYPE_WORKFLOW_MAP["scale_comparison"]
-    with open(wf_path) as f:
-        wf = json.load(f)
-    clip_nodes = [n for n in wf["nodes"] if n["type"] == "CLIPTextEncode"]
-    clip_nodes.sort(key=lambda n: n["id"])
-    pos_prompt = clip_nodes[0]["widgets_values"][0]
-    print(f"  [OK] 正面prompt: {pos_prompt[:80]}...")
-    assert "size" in pos_prompt.lower() or "comparison" in pos_prompt.lower() or "next to" in pos_prompt.lower()
-    print(f"  [PASS] 尺寸对比图: 工作流验证通过\n")
+    Path("output").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir="output") as temp_dir:
+        input_path = Path(temp_dir) / "product.png"
+        output_path = Path(temp_dir) / "scale.jpg"
+        Image.new("RGBA", (480, 720), (120, 150, 180, 255)).save(input_path)
+        generated_path = create_scale_comparison_from_reference(
+            str(input_path),
+            selling_points="便携商品",
+            output_path=str(output_path),
+        )
+        with Image.open(generated_path) as generated:
+            assert generated.size == (1200, 1200)
+            assert generated.mode == "RGB"
+    print("  [OK] 基于上传原图生成 1200x1200 尺寸对比图")
+    print("  [PASS] 尺寸对比图: 确定性生成路径验证通过\n")
 
     # ----------------------------------------------------------
     # 4.5 合规检测报告
@@ -122,7 +132,7 @@ def test_all_deliverables():
     )
     print(f"  [OK] 元数据: {report_path}")
 
-    with open(report_path) as f:
+    with open(report_path, encoding="utf-8") as f:
         metadata = json.load(f)
     # generate_report 使用 report 包装, task_id 嵌套在 task_info 中
     assert "report_version" in metadata or "task_info" in metadata
@@ -145,11 +155,11 @@ def test_all_deliverables():
     print("  1. [PASS] 白底主图 — ComfyUI工作流 + Prompt注入")
     print("  2. [PASS] 场景营销图 — ComfyUI工作流 + 场景Prompt")
     print("  3. [PASS] 细节特写图 — ComfyUI工作流 + 高steps参数")
-    print("  4. [PASS] 尺寸对比图 — ComfyUI工作流 + 参照物Prompt")
+    print("  4. [PASS] 尺寸对比图 — 上传原图锁定 + 确定性参照物卡片")
     print("  5. [PASS] 合规检测报告 — JSON结构化报告 + 修改建议")
     print("  6. [PASS] 素材库归档 — output/{平台}/{商品}_{时间戳}/")
     print()
-    print("  测试覆盖: 37个用例, 100%通过")
+    print("  完整测试覆盖请运行: python -m pytest tests -q")
     print("  模块导入: 13/13, 全部成功")
     print("  版本: v0.3.0")
 

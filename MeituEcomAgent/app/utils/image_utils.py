@@ -2,7 +2,7 @@
 import logging
 from pathlib import Path
 from typing import Optional, Tuple
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageStat
 
 logger = logging.getLogger(__name__)
 
@@ -188,32 +188,21 @@ def composite_product_to_scene(
     
     try:
         with Image.open(product_file) as product_img:
-            product_img = product_img.convert("RGBA")
+            from app.utils.product_cards import prepare_product_cutout
+
+            product_img = prepare_product_cutout(product_img)
             pw, ph = product_img.size
             
             # 创建遮罩：白色/接近白色的像素视为背景（透明），其余为产品
             # 阈值：RGB各通道 > 240 且 alpha > 0 视为白色背景
-            data = product_img.getdata()
-            new_data = []
-            for item in data:
-                r, g, b, a = item
-                # 白色或接近白色 + 有透明度 = 背景，设为透明
-                if r > 235 and g > 235 and b > 235:
-                    new_data.append((r, g, b, 0))
-                elif a < 30:
-                    new_data.append((r, g, b, 0))
-                else:
-                    new_data.append((r, g, b, 255))
-            
-            product_img.putdata(new_data)
             
             with Image.open(scene_file) as scene_img:
                 scene_img = scene_img.convert("RGBA")
                 sw, sh = scene_img.size
                 
                 # 缩放产品到场景的60-70%大小，保持比例
-                scale_w = sw * 0.65 / pw
-                scale_h = sh * 0.7 / ph
+                scale_w = sw * 0.42 / pw
+                scale_h = sh * 0.56 / ph
                 scale = min(scale_w, scale_h)
                 
                 new_pw = int(pw * scale)
@@ -222,9 +211,31 @@ def composite_product_to_scene(
                 
                 # 居中放置产品
                 pos_x = (sw - new_pw) // 2
-                pos_y = (sh - new_ph) // 2 - int(sh * 0.05)  # 略微偏上
+                pos_y = max(int(sh * 0.28), sh - new_ph - int(sh * 0.13))
+
+                # 收缩边缘遮罩并轻微匹配环境亮度，减少白边和贴图感。
+                alpha = product_resized.getchannel("A").filter(ImageFilter.MinFilter(3))
+                alpha = alpha.filter(ImageFilter.GaussianBlur(0.6))
+                product_resized.putalpha(alpha)
+                scene_patch = scene_img.crop((pos_x, pos_y, pos_x + new_pw, pos_y + new_ph)).convert("RGB")
+                scene_luma = sum(ImageStat.Stat(scene_patch).mean) / 3
+                product_luma = sum(ImageStat.Stat(product_resized.convert("RGB")).mean) / 3
+                brightness = max(0.90, min(1.08, scene_luma / max(product_luma, 1)))
+                product_resized = ImageEnhance.Brightness(product_resized).enhance(brightness)
                 
                 # 合成
+                alpha = product_resized.getchannel("A")
+                shadow_height = max(12, int(new_ph * 0.11))
+                shadow_width = max(16, int(new_pw * 0.88))
+                shadow_alpha = alpha.crop((0, max(0, new_ph - max(1, new_ph // 5)), new_pw, new_ph))
+                shadow_alpha = shadow_alpha.resize((shadow_width, shadow_height), Image.LANCZOS)
+                shadow_alpha = shadow_alpha.filter(ImageFilter.GaussianBlur(max(4, shadow_height // 2)))
+                shadow_alpha = shadow_alpha.point(lambda value: int(value * 0.30))
+                shadow = Image.new("RGBA", (shadow_width, shadow_height), (0, 0, 0, 0))
+                shadow.putalpha(shadow_alpha)
+                shadow_x = pos_x + (new_pw - shadow_width) // 2
+                shadow_y = pos_y + new_ph - shadow_height // 2
+                scene_img.alpha_composite(shadow, (shadow_x, shadow_y))
                 scene_img.paste(product_resized, (pos_x, pos_y), product_resized)
                 
                 # 保存

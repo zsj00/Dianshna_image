@@ -151,10 +151,23 @@ class DashScopeImageProvider:
 
     async def generate_image(self, request: ImageGenerationRequest) -> str:
         """创建百炼异步生图任务，轮询完成后下载临时图片 URL。"""
-        task_id = await self._create_task(request)
-        image_url = await self._wait_for_task(task_id)
-        image_bytes = await self._download_image(image_url)
-        return self._save_image(image_bytes, request.image_type)
+        for attempt in range(2):
+            task_id = await self._create_task(request)
+            try:
+                image_url = await self._wait_for_task(task_id)
+                image_bytes = await self._download_image(image_url)
+                return self._save_image(image_bytes, request.image_type)
+            except ImageProviderError as exc:
+                is_timeout = "任务超时" in str(exc)
+                if not is_timeout or attempt == 1:
+                    raise
+                logger.warning(
+                    "百炼图片任务超时，将创建一次新任务重试 | task_id=%s | type=%s",
+                    task_id,
+                    request.image_type,
+                )
+
+        raise ImageProviderError("百炼图片任务未返回结果")
 
     async def close(self) -> None:
         """关闭注入的 HTTP 客户端。"""

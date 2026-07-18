@@ -17,3 +17,6 @@ build/
 *.jpg
 *.png
 !workflows/*.json
+!docs/images/*.jpg
+!docs/images/*.png
+!docs/images/*.webp

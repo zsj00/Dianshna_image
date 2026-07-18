@@ -627,8 +627,14 @@ async function pollTask() {
 
     if (!resp.ok) {
       if (resp.status === 404) {
-        // 任务可能刚创建，后台还没就绪→静默重试
-        document.getElementById('progressText').textContent = '任务初始化中，请稍候...';
+        // 任务已不在内存中，通常是服务重启导致，继续轮询没有意义。
+        clearTimeout(pollTimer);
+        pollTimer = null;
+        currentTaskId = null;
+        document.getElementById('progressStatus').textContent = '任务已失效';
+        document.getElementById('progressText').textContent = '服务已重启，原任务已停止。请重新提交任务。';
+        addLog('任务已失效：服务重启后无法恢复内存中的旧任务，请重新提交。', 'warning');
+        showToast('服务已重启，请重新提交任务', 'warning');
         return;
       }
       throw new Error(`HTTP ${resp.status}`);

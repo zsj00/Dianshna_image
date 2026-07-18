@@ -5,6 +5,7 @@ import unittest
 import asyncio
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from PIL import Image
 
@@ -96,8 +97,53 @@ class TestProviderSelection(unittest.TestCase):
 
         self.assertIn("no product object", positive)
         self.assertIn("central tabletop", positive)
+        self.assertIn("unobstructed horizontal surface", positive)
+        self.assertIn("perspective-compatible", positive)
         self.assertIn("jar", negative)
         self.assertIn("bottle", negative)
+        self.assertIn("duplicate product", negative)
+        self.assertIn("floating object", negative)
+
+    def test_retry_keeps_reference_locked_asset_without_calling_provider(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            reference_path = Path(temp_name) / "reference.png"
+            Image.new("RGBA", (320, 420), (205, 180, 160, 255)).save(reference_path)
+            agent = object.__new__(ImageGeneratorAgent)
+            agent._generate_one_with_tracking = AsyncMock()
+
+            output_path = asyncio.run(
+                agent.regenerate_for_retry(
+                    task_id="retry-lock-test",
+                    image_type="detail_closeup",
+                    prompt_data={"prompt_en": "ignored"},
+                    reference_image_name=str(reference_path),
+                    selling_points="H 12cm / W 4cm / D 4cm",
+                )
+            )
+
+            self.assertTrue(Path(output_path).exists())
+            agent._generate_one_with_tracking.assert_not_awaited()
+
+    def test_scene_retry_uses_locked_white_main_for_compositing(self):
+        with tempfile.TemporaryDirectory() as temp_name:
+            reference_path = Path(temp_name) / "reference.png"
+            Image.new("RGBA", (320, 420), (205, 180, 160, 255)).save(reference_path)
+            agent = object.__new__(ImageGeneratorAgent)
+            agent._generate_one_with_tracking = AsyncMock(return_value="scene.jpg")
+
+            result = asyncio.run(
+                agent.regenerate_for_retry(
+                    task_id="scene-retry-test",
+                    image_type="scene_lifestyle",
+                    prompt_data={"prompt_en": "empty premium scene"},
+                    reference_image_name=str(reference_path),
+                    selling_points="H 12cm / W 4cm / D 4cm",
+                )
+            )
+
+            self.assertEqual(result, "scene.jpg")
+            white_main_path = agent._generate_one_with_tracking.await_args.kwargs["white_bg_path"]
+            self.assertTrue(Path(white_main_path).exists())
 
 
 if __name__ == "__main__":
