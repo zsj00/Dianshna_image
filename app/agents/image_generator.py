@@ -1,4 +1,4 @@
-﻿"""
+"""
 生图调度Agent - 负责根据解析后的规则调度图片生成流程
 
 核心功能:
@@ -21,6 +21,18 @@ from typing import Optional, Dict, List, Tuple, Any
 
 from app.config import settings
 from app.services.comfyui_service import ComfyUIClient, ComfyUIError
+from app.services.image_provider import (
+    CloudImageProvider,
+    DashScopeImageProvider,
+    ImageGenerationRequest,
+    ImageProviderError,
+)
+from app.utils.product_cards import (
+    create_detail_from_reference,
+    create_dimension_sheet_from_reference,
+    create_scale_comparison_from_reference,
+    create_white_main_from_reference,
+)
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -80,7 +92,17 @@ class ImageGeneratorAgent:
         Args:
             server_address: ComfyUI 服务地址（可选，默认从配置读取）
         """
-        self.comfyui = ComfyUIClient(server_address=server_address)
+        self.provider_name = settings.IMAGE_PROVIDER
+        self.comfyui: Optional[ComfyUIClient] = None
+        self.cloud_provider: Optional[CloudImageProvider | DashScopeImageProvider] = None
+        if settings.is_comfyui_image_provider:
+            self.comfyui = ComfyUIClient(server_address=server_address)
+        elif settings.is_cloud_image_provider:
+            self.cloud_provider = CloudImageProvider()
+        elif settings.is_dashscope_image_provider:
+            self.cloud_provider = DashScopeImageProvider()
+        else:
+            raise ImageGeneratorError(f"不支持的图片生成 Provider: {settings.IMAGE_PROVIDER}")
 
         # 工作流目录和输出目录（使用绝对路径）
         base_dir = Path(__file__).resolve().parent.parent.parent
@@ -94,7 +116,8 @@ class ImageGeneratorAgent:
         self._tasks: Dict[str, dict] = {}
 
         logger.info(
-            "ImageGeneratorAgent initialized | workflow_dir=%s | output_dir=%s",
+            "ImageGeneratorAgent initialized | provider=%s | workflow_dir=%s | output_dir=%s",
+            self.provider_name,
             self.workflow_dir,
             self.output_dir,
         )
@@ -460,6 +483,7 @@ class ImageGeneratorAgent:
         timeout: int = 300,
         reference_image_name: str = "",
         selling_points: str = "",
+        image_type: str = "product",
     ) -> str:
         """
         提交单个生图任务，等待完成并下载图片
@@ -478,6 +502,25 @@ class ImageGeneratorAgent:
             GenerationError: 生图失败
         """
         width, height = resolution
+
+        if settings.is_cloud_image_provider or settings.is_dashscope_image_provider:
+            if self.cloud_provider is None:
+                raise GenerationError("云端图片 Provider 未初始化")
+            try:
+                return await self.cloud_provider.generate_image(
+                    ImageGenerationRequest(
+                        positive_prompt=positive_prompt,
+                        negative_prompt=negative_prompt,
+                        resolution=(width, height),
+                        image_type=image_type,
+                        reference_image=reference_image_name,
+                    )
+                )
+            except ImageProviderError as e:
+                raise GenerationError(str(e)) from e
+
+        if self.comfyui is None:
+            raise GenerationError("ComfyUI Provider 未初始化")
 
         # 1. 注入 prompt
         workflow = self.inject_prompt(workflow, positive_prompt, negative_prompt)
@@ -584,12 +627,16 @@ class ImageGeneratorAgent:
         if not prompts:
             raise GenerationError("prompts 字典为空")
 
-        # 检查 ComfyUI 连接
-        connected = await self.comfyui.check_connection()
-        if not connected:
-            raise GenerationError(
-                f"ComfyUI 服务不可用: {self.comfyui.server_address}"
-            )
+        if settings.is_comfyui_image_provider:
+            if self.comfyui is None:
+                raise GenerationError("ComfyUI Provider 未初始化")
+            connected = await self.comfyui.check_connection()
+            if not connected:
+                raise GenerationError(
+                    f"ComfyUI 服务不可用: {self.comfyui.server_address}"
+                )
+        elif self.cloud_provider is None or not await self.cloud_provider.check_connection():
+            raise GenerationError("云端图片 Provider 配置不可用，请检查 OPENAI_API_KEY/DASHSCOPE_API_KEY/图片模型配置")
 
         image_types = list(prompts.keys())
         logger.info(
@@ -700,24 +747,6 @@ class ImageGeneratorAgent:
         self._update_task(task_id, status=TaskStatus.GENERATING)
 
         try:
-            # 确定工作流文件
-            workflow_name = IMAGE_TYPE_WORKFLOW_MAP.get(
-                image_type,
-                IMAGE_TYPE_WORKFLOW_MAP["_default"],
-            )
-
-            # 加载工作流
-            try:
-                workflow = self.load_workflow(workflow_name)
-            except WorkflowLoadError:
-                # 回退到默认工作流
-                logger.warning(
-                    "工作流 '%s' 不存在，使用默认工作流",
-                    workflow_name,
-                )
-                workflow_name = IMAGE_TYPE_WORKFLOW_MAP["_default"]
-                workflow = self.load_workflow(workflow_name)
-
             # 解析参数（兼容 prompt_data 为纯字符串的情况）
             if isinstance(prompt_data, str):
                 positive = prompt_data
@@ -727,7 +756,53 @@ class ImageGeneratorAgent:
                 positive = prompt_data.get("prompt_en", "")
                 negative = prompt_data.get("negative_prompt", "")
                 resolution_str = prompt_data.get("resolution", "1024x1024")
+
+            reference_locked_path = await asyncio.to_thread(
+                self._generate_reference_locked_asset,
+                image_type,
+                reference_image_name,
+                selling_points,
+            )
+            if reference_locked_path:
+                self._update_task(
+                    task_id,
+                    status=TaskStatus.COMPLETED,
+                    output_paths=[reference_locked_path],
+                )
+                return reference_locked_path
+
+            scene_background_only = self._should_generate_scene_background(image_type, white_bg_path)
+            if scene_background_only:
+                positive, negative = self._build_scene_background_prompt(
+                    positive_prompt=positive,
+                    negative_prompt=negative,
+                    selling_points=selling_points,
+                )
+            else:
+                positive, negative = self._enhance_prompt_for_consistency(
+                    positive_prompt=positive,
+                    negative_prompt=negative,
+                    image_type=image_type,
+                    selling_points=selling_points,
+                    reference_image_name=reference_image_name,
+                )
             resolution = self.parse_resolution(resolution_str)
+
+            workflow = {}
+            if settings.is_comfyui_image_provider:
+                workflow_name = IMAGE_TYPE_WORKFLOW_MAP.get(
+                    image_type,
+                    IMAGE_TYPE_WORKFLOW_MAP["_default"],
+                )
+                try:
+                    workflow = self.load_workflow(workflow_name)
+                except WorkflowLoadError:
+                    logger.warning(
+                        "工作流 '%s' 不存在，使用默认工作流",
+                        workflow_name,
+                    )
+                    workflow_name = IMAGE_TYPE_WORKFLOW_MAP["_default"]
+                    workflow = self.load_workflow(workflow_name)
 
             # 生成
             output_path = await self.generate_single_image(
@@ -737,6 +812,7 @@ class ImageGeneratorAgent:
                 resolution=resolution,
                 timeout=timeout,
                 reference_image_name=reference_image_name,
+                image_type=image_type,
             )
 
             # 后处理：根据图片类型优化输出
@@ -757,6 +833,139 @@ class ImageGeneratorAgent:
             )
             raise
 
+    async def regenerate_for_retry(
+        self,
+        task_id: str,
+        image_type: str,
+        prompt_data: dict,
+        reference_image_name: str = "",
+        selling_points: str = "",
+        timeout: int = 300,
+    ) -> str:
+        """使用与首次生成相同的路径重试，避免合规重试重绘已锁定的商品。"""
+        reference_locked_path = await asyncio.to_thread(
+            self._generate_reference_locked_asset,
+            image_type,
+            reference_image_name,
+            selling_points,
+        )
+        if reference_locked_path:
+            return reference_locked_path
+
+        white_bg_path = ""
+        if image_type == "scene_lifestyle" and reference_image_name:
+            white_bg_path = await asyncio.to_thread(
+                self._generate_reference_locked_asset,
+                "white_bg_main",
+                reference_image_name,
+                selling_points,
+            )
+
+        return await self._generate_one_with_tracking(
+            task_id=task_id,
+            image_type=image_type,
+            prompt_data=prompt_data,
+            timeout=timeout,
+            reference_image_name=reference_image_name,
+            selling_points=selling_points,
+            white_bg_path=white_bg_path,
+        )
+
+    @staticmethod
+    def _is_cloud_like_provider() -> bool:
+        """判断当前是否为云端生图 Provider。"""
+        return settings.is_cloud_image_provider or settings.is_dashscope_image_provider
+
+    @classmethod
+    def _generate_reference_locked_asset(
+        cls,
+        image_type: str,
+        reference_image_name: str = "",
+        selling_points: str = "",
+    ) -> str:
+        """对强一致性图片直接基于上传原图生成，避免云端文生图改造商品。"""
+        if not reference_image_name:
+            return ""
+
+        if image_type == "white_bg_main":
+            output_path = create_white_main_from_reference(reference_image_name)
+        elif image_type == "detail_closeup":
+            output_path = create_detail_from_reference(reference_image_name)
+        elif image_type == "scale_comparison":
+            output_path = create_scale_comparison_from_reference(reference_image_name, selling_points)
+        else:
+            return ""
+
+        logger.info("原图锁定素材生成完成 | type=%s | path=%s", image_type, output_path)
+        return output_path
+
+    @classmethod
+    def _should_generate_scene_background(cls, image_type: str, white_bg_path: str = "") -> bool:
+        """场景图先生成空背景，再用原商品融合。"""
+        return image_type == "scene_lifestyle" and bool(white_bg_path)
+
+    @staticmethod
+    def _build_scene_background_prompt(
+        positive_prompt: str,
+        negative_prompt: str,
+        selling_points: str = "",
+    ) -> Tuple[str, str]:
+        """生成空场景背景 Prompt，避免模型再画一个错误商品。"""
+        positive_parts = [
+            positive_prompt.strip(),
+            "Create only a premium ecommerce lifestyle background, no product object in the scene.",
+            "Leave a clean central tabletop or shelf area for later product compositing, with an unobstructed horizontal surface.",
+            "Use perspective-compatible eye-level commercial photography, soft natural window light, and a believable product placement zone in the lower middle of the frame.",
+            "Keep props subtle and pushed to the edges; do not block the placement zone.",
+        ]
+        if selling_points:
+            positive_parts.append(f"Scene mood should support these selling points: {selling_points}.")
+
+        negative_parts = [
+            negative_prompt.strip(),
+            "product, jar, bottle, tube, pump, cosmetic container, package, label, logo, text, watermark, duplicate product, floating object, obstructed tabletop, crowded center",
+        ]
+        return (
+            "\n\n".join(part for part in positive_parts if part),
+            ", ".join(part for part in negative_parts if part),
+        )
+
+    @staticmethod
+    def _enhance_prompt_for_consistency(
+        positive_prompt: str,
+        negative_prompt: str,
+        image_type: str,
+        selling_points: str = "",
+        reference_image_name: str = "",
+    ) -> Tuple[str, str]:
+        """在发给图片 Provider 前统一增强商品一致性和卖点表达。"""
+        positive_parts = [
+            positive_prompt.strip(),
+            (
+                "Keep the exact same product SKU as the uploaded reference: same cream jar silhouette, "
+                "same black glossy lid, same translucent frosted container, same cream texture and color, "
+                "same label position and product proportions. Do not invent a different object."
+            ),
+            f"Online reference benchmark: {settings.ONLINE_REFERENCE_STYLE}.",
+            f"Image type requirement: {image_type}.",
+        ]
+        if selling_points:
+            positive_parts.append(f"Clearly express these selling points visually: {selling_points}.")
+        if reference_image_name:
+            positive_parts.append("Use the uploaded product image as the identity reference when supported.")
+
+        negative_parts = [
+            negative_prompt.strip(),
+            (
+                "different product, different jar, different lid, wrong container color, changed label, "
+                "extra random items replacing product, unreadable fake brand text, watermark, low resolution, blurry"
+            ),
+        ]
+        return (
+            "\n\n".join(part for part in positive_parts if part),
+            ", ".join(part for part in negative_parts if part),
+        )
+
     # ==================== 后处理 ====================
 
     @staticmethod
@@ -766,30 +975,23 @@ class ImageGeneratorAgent:
         
         - white_bg_main: 确保纯白背景（消除PNG透明度）
         - detail_closeup: 中心裁剪（突出细节），保留原始背景
-        - scale_comparison: 添加专业尺寸标注线（长宽高cm）
+        - scale_comparison: 保留无文字、无标注线的比例参照构图
         - scene_lifestyle: 保留原始场景背景，不做白底处理
         """
         from app.utils.image_utils import (
             ensure_white_background,
             crop_center,
-            add_size_label,
         )
         
         try:
             if image_type == "white_bg_main":
                 image_path = ensure_white_background(image_path)
                 logger.info("后处理[white_bg]: 白底填充完成")
-                # 叠加商品卖点文案
-                if selling_points:
-                    from app.utils.image_utils import overlay_selling_points
-                    image_path = overlay_selling_points(image_path, selling_points)
-                    logger.info("后处理[white_bg]: 商品文案叠加完成")
             elif image_type == "detail_closeup":
                 image_path = crop_center(image_path, crop_ratio=0.4)
                 logger.info("后处理[detail]: 中心裁剪完成（40%区域）")
             elif image_type == "scale_comparison":
-                image_path = add_size_label(image_path)
-                logger.info("后处理[comparison]: 专业尺寸标注完成")
+                logger.info("后处理[comparison]: 保留无标注比例参照图")
             elif image_type == "scene_lifestyle":
                 logger.info("后处理[scene]: 执行产品+场景合成")
                 if white_bg_path:
@@ -840,6 +1042,13 @@ class ImageGeneratorAgent:
         Raises:
             GenerationError: 上传失败
         """
+        if settings.is_cloud_image_provider or settings.is_dashscope_image_provider:
+            logger.info("云端图片 Provider 跳过 ComfyUI 参考图上传 | path=%s", image_path)
+            return image_path
+
+        if self.comfyui is None:
+            raise GenerationError("ComfyUI Provider 未初始化")
+
         src = Path(image_path)
         if not src.exists():
             raise GenerationError(f"商品原图不存在: {image_path}")
@@ -886,5 +1095,8 @@ class ImageGeneratorAgent:
 
     async def close(self) -> None:
         """关闭资源"""
-        await self.comfyui.close()
+        if self.comfyui:
+            await self.comfyui.close()
+        if self.cloud_provider:
+            await self.cloud_provider.close()
         logger.info("ImageGeneratorAgent 已关闭")

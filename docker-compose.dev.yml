@@ -1,0 +1,15 @@
+# ============================================================
+# MeituEcomAgent - 本地 ComfyUI/dev 覆盖配置
+# ============================================================
+
+services:
+  api:
+    environment:
+      - IMAGE_PROVIDER=comfyui
+      - COMFYUI_ENABLED=true
+      - ENABLE_LOCAL_PREPROCESSING=true
+      - U2NET_HOME=/app/.data/u2net
+    volumes:
+      - ./app:/app/app
+      - ./workflows:/app/workflows:ro
+      - ./.data/u2net:/app/.data/u2net

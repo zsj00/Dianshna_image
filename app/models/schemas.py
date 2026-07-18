@@ -222,6 +222,7 @@ class HealthCheckResponse(BaseModel):
 
     status: str = Field(..., description="整体状态")
     api: str = Field(default="ok", description="API服务状态")
+    image_provider: str = Field(default="unknown", description="图片生成Provider状态")
     comfyui: str = Field(default="unknown", description="ComfyUI连接状态")
     knowledge_base: str = Field(default="unknown", description="知识库状态")
     version: str = Field(default="0.3.0", description="版本号")
@@ -322,3 +323,11 @@ class PipelineResponse(BaseModel):
     status: str = Field(default="pending", description="任务状态")
     message: str = Field(default="任务已提交", description="响应消息")
     product_image_saved: Optional[str] = Field(default=None, description="原图保存路径")
+
+
+class SellingPointSuggestionResponse(BaseModel):
+    """商品图片卖点生成响应"""
+
+    selling_points: str = Field(..., description="可直接用于生成任务的卖点文案")
+    points: List[str] = Field(default_factory=list, description="结构化卖点列表")
+    product_summary: str = Field(default="", description="商品视觉摘要")

@@ -3,6 +3,8 @@ Pipeline 数据流 & 配置单元测试
 """
 import unittest
 import json
+import inspect
+import tempfile
 from pathlib import Path
 
 from app.config import settings
@@ -16,11 +18,12 @@ class TestConfig(unittest.TestCase):
 
     def test_required_configs_not_empty(self):
         required = [
-            ("OPENAI_API_KEY", settings.OPENAI_API_KEY),
             ("OPENAI_BASE_URL", settings.OPENAI_BASE_URL),
             ("EMBEDDING_MODEL", settings.EMBEDDING_MODEL),
             ("CHAT_MODEL", settings.CHAT_MODEL),
             ("VISION_MODEL", settings.VISION_MODEL),
+            ("IMAGE_PROVIDER", settings.IMAGE_PROVIDER),
+            ("IMAGE_MODEL", settings.IMAGE_MODEL),
         ]
         for name, value in required:
             self.assertTrue(
@@ -38,14 +41,32 @@ class TestConfig(unittest.TestCase):
         for name, value in path_configs:
             self.assertTrue(value, f"{name} must not be empty")
 
+    def test_resolve_project_path_preserves_absolute_path(self):
+        """绝对输出目录不能被解析到 app 子目录。"""
+        with tempfile.TemporaryDirectory() as tempdir:
+            absolute_path = Path(tempdir).resolve()
+            self.assertEqual(
+                settings.resolve_project_path(str(absolute_path)),
+                absolute_path,
+            )
+
     def test_log_config(self):
         self.assertIn(settings.LOG_LEVEL.upper(),
                       ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
         self.assertTrue(len(settings.LOG_FILE) > 0)
 
-    def test_openai_base_url_is_alibaba(self):
-        """验证使用阿里云百炼 API"""
-        self.assertIn("dashscope.aliyuncs.com", settings.OPENAI_BASE_URL)
+    def test_openai_base_url_is_configurable(self):
+        """验证支持 OpenAI-compatible API 配置"""
+        self.assertTrue(settings.OPENAI_BASE_URL.startswith(("http://", "https://")))
+
+    def test_image_provider_is_supported(self):
+        """图片 Provider 必须是受支持的可部署模式"""
+        self.assertIn(settings.IMAGE_PROVIDER, {"cloud", "dashscope", "comfyui"})
+        self.assertTrue(
+            settings.is_cloud_image_provider
+            or settings.is_dashscope_image_provider
+            or settings.is_comfyui_image_provider
+        )
 
 
 class TestKnowledgeBase(unittest.TestCase):
@@ -133,6 +154,22 @@ class TestPipelineDataFlow(unittest.TestCase):
             missing = required_fields - set(prompt_data.keys())
             self.assertFalse(missing, f"{img_type} missing: {missing}")
 
+    def test_retry_pipeline_accepts_selling_points(self):
+        """合规重试必须接收卖点，不能依赖未定义的任务局部变量。"""
+        from app.agents.orchestrator import AgentOrchestrator
+
+        parameters = inspect.signature(AgentOrchestrator._audit_and_retry).parameters
+        self.assertIn("selling_points", parameters)
+
+    def test_pipeline_does_not_require_actual_dimensions(self):
+        """无标注比例图不能要求用户填写尺寸。"""
+        from app.main import pipeline_ecommerce_assets
+
+        parameters = inspect.signature(pipeline_ecommerce_assets).parameters
+        self.assertNotIn("product_height_mm", parameters)
+        self.assertNotIn("product_width_mm", parameters)
+        self.assertNotIn("product_depth_mm", parameters)
+
     def test_audit_result_structure(self):
         """验证 check_image_set() 返回结构正确"""
         sample_audit = {
@@ -213,6 +250,85 @@ class TestPipelineDataFlow(unittest.TestCase):
         # 验证JSON可序列化
         parsed = json.loads(report_dumps)
         self.assertEqual(parsed["status"], "completed")
+
+
+class TestPromptQualityGuards(unittest.TestCase):
+    """Prompt 一致性与卖点兜底测试"""
+
+    def test_rule_parser_stabilizes_product_identity(self):
+        from app.agents.rule_parser import RuleParserAgent
+
+        parser = RuleParserAgent.__new__(RuleParserAgent)
+        image_set = {
+            "white_bg_main": {
+                "prompt_en": "premium cosmetic jar on white background",
+                "negative_prompt": "watermark",
+            },
+            "scene_lifestyle": {
+                "prompt_en": "cosmetic jar on bathroom shelf",
+                "negative_prompt": "",
+            },
+        }
+
+        identity = parser._build_product_identity(
+            product_desc="粉色面霜罐，黑色亮面盖",
+            visual_analysis="半透明磨砂罐身，淡粉色膏体，黑色圆盖",
+            selling_points="20ml黄金容量 | 便携 | 滋润",
+        )
+        parser._stabilize_image_prompts(image_set, identity, "20ml黄金容量 | 便携 | 滋润")
+
+        for prompt_data in image_set.values():
+            self.assertIn("CONSISTENCY LOCK", prompt_data["prompt_en"])
+            self.assertIn("same exact SKU", prompt_data["prompt_en"])
+            self.assertIn("20ml黄金容量", prompt_data["prompt_en"])
+            self.assertIn("different product", prompt_data["negative_prompt"])
+
+    def test_image_generator_enhances_prompt_before_provider(self):
+        from app.agents.image_generator import ImageGeneratorAgent
+
+        positive, negative = ImageGeneratorAgent._enhance_prompt_for_consistency(
+            positive_prompt="cosmetic cream jar product photo",
+            negative_prompt="watermark",
+            image_type="detail_closeup",
+            selling_points="细腻膏体 | 便携容量",
+            reference_image_name="product.webp",
+        )
+
+        self.assertIn("same cream jar silhouette", positive)
+        self.assertIn("Online reference benchmark", positive)
+        self.assertIn("细腻膏体", positive)
+        self.assertIn("different product", negative)
+
+    async def _fake_visual_analysis(self, image_path, product_desc):
+        return "半透明磨砂面霜罐，黑色亮面盖，淡粉色膏体，适合护肤品场景"
+
+    async def _fake_selling_points_llm(self, system_prompt, user_prompt):
+        return json.dumps(
+            {
+                "product_summary": "一款精致护肤面霜罐",
+                "points": ["精致小罐", "黑色亮盖", "细腻膏体", "护肤场景"],
+                "selling_points": "精致小罐 | 黑色亮盖 | 细腻膏体 | 护肤场景",
+            },
+            ensure_ascii=False,
+        )
+
+    def test_rule_parser_suggests_selling_points_from_image(self):
+        import asyncio
+        from app.agents.rule_parser import RuleParserAgent
+
+        parser = RuleParserAgent.__new__(RuleParserAgent)
+        parser._analyze_reference_image = self._fake_visual_analysis
+        parser._call_llm = self._fake_selling_points_llm
+
+        result = asyncio.run(
+            parser.suggest_selling_points_from_image(
+                image_path="fake.png",
+                platform="taobao",
+            )
+        )
+
+        self.assertIn("精致小罐", result["selling_points"])
+        self.assertEqual(len(result["points"]), 4)
 
 
 if __name__ == "__main__":

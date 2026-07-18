@@ -12,6 +12,8 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+
 from llama_index import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -21,11 +23,13 @@ from llama_index import (
 from llama_index.embeddings import OpenAIEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 
 from app.config import settings
 
 # 配置日志
 logger = logging.getLogger(__name__)
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 
 
 class RAGService:
@@ -39,9 +43,13 @@ class RAGService:
         self.knowledge_base_dir = str(base_dir / settings.KNOWLEDGE_BASE_DIR)
         self.embedding_model_name = settings.EMBEDDING_MODEL
         self.collection_name = "platform_rules"
+        self.chroma_settings = ChromaSettings(anonymized_telemetry=False)
 
         # 初始化 ChromaDB 客户端
-        self.chroma_client = chromadb.PersistentClient(path=self.persist_dir)
+        self.chroma_client = chromadb.PersistentClient(
+            path=self.persist_dir,
+            settings=self.chroma_settings,
+        )
 
         # 确保持久化目录存在
         os.makedirs(self.persist_dir, exist_ok=True)
@@ -97,6 +105,7 @@ class RAGService:
         """创建 ServiceContext"""
         embed_model = self._create_embedding_model()
         return ServiceContext.from_defaults(
+            llm=None,
             embed_model=embed_model,
             chunk_size=1024,
             chunk_overlap=200,
@@ -200,7 +209,10 @@ class RAGService:
             return None
 
         try:
-            chroma_client = chromadb.PersistentClient(path=self.persist_dir)
+            chroma_client = chromadb.PersistentClient(
+                path=self.persist_dir,
+                settings=self.chroma_settings,
+            )
 
             # 检查 collection 是否存在
             collection_names = chroma_client.list_collections()

@@ -1,4 +1,4 @@
-﻿"""
+"""
 FastAPI 主应用入口
 
 提供 REST API 端点:
@@ -41,11 +41,13 @@ from app.models.schemas import (
     ErrorResponse,
     PipelineFormRequest,
     PipelineResponse,
+    SellingPointSuggestionResponse,
 )
 from app.agents.orchestrator import AgentOrchestrator, PipelineStatus
 from app.agents.compliance_checker import ComplianceCheckerAgent, ComplianceCheckerError
 from app.services.rag_service import RAGService
 from app.services.comfyui_service import ComfyUIClient
+from app.services.image_provider import CloudImageProvider, DashScopeImageProvider
 
 # 配置日志
 log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
@@ -281,16 +283,37 @@ async def health_check():
     """
     global _comfyui_client, _comfyui_available
 
-    # 检查 ComfyUI（使用缓存，避免每次请求都创建新客户端）
+    # 检查图片生成 Provider。云端模式不要求本地 ComfyUI 在线。
+    image_provider_status = "unknown"
     comfyui_status = "unknown"
-    if _comfyui_client is None:
-        _comfyui_client = ComfyUIClient()
-    if _comfyui_available is None:
+    if settings.is_cloud_image_provider:
+        cloud_provider = CloudImageProvider()
         try:
-            _comfyui_available = await _comfyui_client.check_connection()
-        except Exception:
-            _comfyui_available = False
-    comfyui_status = "connected" if _comfyui_available else "disconnected"
+            image_provider_status = "cloud:configured" if await cloud_provider.check_connection() else "cloud:missing_config"
+        finally:
+            await cloud_provider.close()
+        comfyui_status = "optional"
+    elif settings.is_dashscope_image_provider:
+        dashscope_provider = DashScopeImageProvider()
+        try:
+            image_provider_status = "dashscope:configured" if await dashscope_provider.check_connection() else "dashscope:missing_config"
+        finally:
+            await dashscope_provider.close()
+        comfyui_status = "optional"
+    elif settings.is_comfyui_image_provider:
+        image_provider_status = "comfyui"
+        if _comfyui_client is None:
+            _comfyui_client = ComfyUIClient()
+        if _comfyui_available is None:
+            try:
+                _comfyui_available = await _comfyui_client.check_connection()
+            except Exception:
+                _comfyui_available = False
+        comfyui_status = "connected" if _comfyui_available else "disconnected"
+        if comfyui_status == "disconnected":
+            image_provider_status = "comfyui:disconnected"
+    else:
+        image_provider_status = f"unsupported:{settings.IMAGE_PROVIDER}"
 
     # 检查知识库
     kb_status = "unknown"
@@ -305,7 +328,9 @@ async def health_check():
     # 综合状态
     if "error" in kb_status:
         overall = "degraded"
-    elif comfyui_status == "disconnected":
+    elif image_provider_status.endswith("missing_config") or image_provider_status.startswith("unsupported"):
+        overall = "degraded"
+    elif settings.is_comfyui_image_provider and comfyui_status == "disconnected":
         overall = "degraded"
     elif kb_status == "not_built":
         overall = "degraded"
@@ -315,6 +340,7 @@ async def health_check():
     return HealthCheckResponse(
         status=overall,
         api="ok",
+        image_provider=image_provider_status,
         comfyui=comfyui_status,
         knowledge_base=kb_status,
         version=app.version,
@@ -645,7 +671,7 @@ static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # 挂载 output 目录（生成图片浏览）
-output_dir_static = Path(__file__).resolve().parent.parent / settings.OUTPUT_DIR.lstrip("./")
+output_dir_static = settings.resolve_project_path(settings.OUTPUT_DIR)
 output_dir_static.mkdir(parents=True, exist_ok=True)
 app.mount("/output", StaticFiles(directory=str(output_dir_static)), name="output")
 
@@ -678,6 +704,58 @@ async def root():
     """根路由 - 重定向到 Web UI"""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url="/ui")
+
+
+@app.post(
+    "/api/v1/selling-points/from-image",
+    response_model=SellingPointSuggestionResponse,
+    summary="根据商品图片自动生成卖点",
+    description="上传商品图片，调用视觉模型提取商品特征并生成可直接用于电商生图的卖点文案。",
+    tags=["管道"],
+)
+async def suggest_selling_points_from_image(
+    product_image: UploadFile = File(..., description="商品原图（支持 PNG/JPEG/WebP）"),
+    platform: str = Form("taobao", description="目标平台: amazon / taobao / aliexpress / shopee"),
+):
+    """根据商品图片自动生成卖点文案。"""
+    from pathlib import Path
+    from app.utils.file_utils import ensure_directory
+
+    valid_platforms = ["amazon", "aliexpress", "taobao", "shopee"]
+    platform_lower = platform.lower().strip()
+    if platform_lower not in valid_platforms:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的平台: '{platform}'。支持: {', '.join(valid_platforms)}",
+        )
+
+    image_bytes = await product_image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="商品图片不能为空")
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片文件过大，最大支持 20MB")
+
+    ext = Path(product_image.filename).suffix.lower() if product_image.filename else ".png"
+    if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(status_code=400, detail="仅支持 PNG/JPEG/WebP 图片")
+
+    base_dir = Path(__file__).resolve().parent.parent
+    upload_dir = base_dir / settings.OUTPUT_DIR / "uploads"
+    ensure_directory(str(upload_dir))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:18]
+    image_path = upload_dir / f"selling_points_{timestamp}{ext}"
+    image_path.write_bytes(image_bytes)
+
+    try:
+        result = await get_orchestrator().rule_parser.suggest_selling_points_from_image(
+            image_path=str(image_path),
+            platform=platform_lower,
+        )
+    except Exception as exc:
+        logger.exception("自动生成卖点失败: %s", str(exc))
+        raise HTTPException(status_code=502, detail=f"自动生成卖点失败: {str(exc)}") from exc
+
+    return SellingPointSuggestionResponse(**result)
 
 
 # ---- 电商全管道端点（Form表单 + 文件上传） ----
@@ -732,6 +810,8 @@ async def pipeline_ecommerce_assets(
             detail=f"不支持的平台: '{platform}'。支持: {', '.join(valid_platforms)}",
         )
 
+    combined_selling_points = selling_points.strip()
+
     # 2. 保存上传的商品原图
     base_dir = Path(__file__).resolve().parent.parent
     upload_dir = base_dir / settings.OUTPUT_DIR / "uploads"
@@ -758,28 +838,31 @@ async def pipeline_ecommerce_assets(
         len(image_bytes),
     )
 
-    # 3. 自动抠图 + 白底合成（异步执行，30s超时，失败则跳过）
+    # 3. 可选本地抠图 + 白底合成（生产默认关闭，避免依赖本地模型）
     white_bg_path = original_path  # 默认使用原图
     _PROCESSING_TIMEOUT = 30  # 抠图最长等待30秒
 
-    try:
-        logger.info("开始自动抠图 + 白底合成（超时=%ds）...", _PROCESSING_TIMEOUT)
-        white_bg_bytes = await asyncio.wait_for(
-            asyncio.to_thread(
-                ImagePreprocessor.make_white_background,
-                str(original_path),
-                (800, 800),
-            ),
-            timeout=_PROCESSING_TIMEOUT,
-        )
-        white_bg_filename = f"white_bg_{timestamp}.jpg"
-        white_bg_path = upload_dir / white_bg_filename
-        white_bg_path.write_bytes(white_bg_bytes)
-        logger.info("白底图已生成 | path=%s", white_bg_path)
-    except asyncio.TimeoutError:
-        logger.warning("自动抠图超时（%ds），将使用原图继续", _PROCESSING_TIMEOUT)
-    except Exception as e:
-        logger.warning("自动抠图/白底合成失败（将使用原图继续）: %s", str(e))
+    if settings.ENABLE_LOCAL_PREPROCESSING:
+        try:
+            logger.info("开始本地抠图 + 白底合成（超时=%ds）...", _PROCESSING_TIMEOUT)
+            white_bg_bytes = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ImagePreprocessor.make_white_background,
+                    str(original_path),
+                    (800, 800),
+                ),
+                timeout=_PROCESSING_TIMEOUT,
+            )
+            white_bg_filename = f"white_bg_{timestamp}.jpg"
+            white_bg_path = upload_dir / white_bg_filename
+            white_bg_path.write_bytes(white_bg_bytes)
+            logger.info("白底图已生成 | path=%s", white_bg_path)
+        except asyncio.TimeoutError:
+            logger.warning("本地抠图超时（%ds），将使用原图继续", _PROCESSING_TIMEOUT)
+        except Exception as e:
+            logger.warning("本地抠图/白底合成失败（将使用原图继续）: %s", str(e))
+    else:
+        logger.info("本地抠图预处理未启用，使用原图继续 | ENABLE_LOCAL_PREPROCESSING=false")
 
     # 4. 先同步创建任务（解决竞态条件：background_tasks 在响应返回后才执行）
     orchestrator = get_orchestrator()
@@ -788,7 +871,7 @@ async def pipeline_ecommerce_assets(
     orchestrator._init_task(
         task_id=task_id,
         platform=platform_lower,
-        product_desc=selling_points,
+        product_desc=combined_selling_points,
     )
 
     # 5. 提交后台任务
@@ -797,13 +880,13 @@ async def pipeline_ecommerce_assets(
             logger.info(
                 "电商管道后台任务开始 | platform=%s | selling_points=%s",
                 platform_lower,
-                selling_points[:50],
+                combined_selling_points[:50],
             )
             await orchestrator.run_pipeline(
                 platform=platform_lower,
-                product_desc=selling_points,
+                product_desc=combined_selling_points,
                 reference_image=str(white_bg_path),
-                selling_points=selling_points,
+                selling_points=combined_selling_points,
                 max_retries=max_retries,
                 task_id=task_id,
             )
